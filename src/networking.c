@@ -34,6 +34,7 @@
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
+#include "dbio.h"
 
 static void setProtocolError(const char *errstr, client *c);
 int postponeClientRead(client *c);
@@ -154,6 +155,7 @@ client *createClient(connection *conn) {
     listSetFreeMethod(c->reply,freeClientReplyValue);
     listSetDupMethod(c->reply,dupClientReplyValue);
     c->btype = BLOCKED_NONE;
+	c->db_load_req_num = 0;
     c->bpop.timeout = 0;
     c->bpop.keys = dictCreate(&objectKeyHeapPointerValueDictType,NULL);
     c->bpop.target = NULL;
@@ -1891,6 +1893,15 @@ void commandProcessed(client *c) {
  * of processing the command, otherwise C_OK is returned. */
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
+
+	int ret = tryReadEmptyKeys(c);
+	if (ret == 1)
+		return C_LOAD;
+	else if (ret == 2) {
+		commandProcessed(c);
+		return C_OK;
+	}
+
     server.current_client = c;
     if (processCommand(c) == C_OK) {
         commandProcessed(c);
@@ -1923,6 +1934,7 @@ int processPendingCommandsAndResetClient(client *c) {
 void processInputBuffer(client *c) {
     /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
+		int old_qb_pos = c->qb_pos;
         /* Return if clients are paused. */
         if (!(c->flags & CLIENT_SLAVE) && 
             !(c->flags & CLIENT_PENDING_READ) && 
@@ -1990,12 +2002,19 @@ void processInputBuffer(client *c) {
             }
 
             /* We are finally ready to execute the command. */
-            if (processCommandAndResetClient(c) == C_ERR) {
+			int ret = processCommandAndResetClient(c);
+            if (ret == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
                  * ASAP in that case. */
                 return;
             }
+			else if (ret == C_LOAD) {
+				resetClient(c);
+				/*还原解析位置*/
+				c->qb_pos = old_qb_pos;
+				return;
+			}
         }
     }
 

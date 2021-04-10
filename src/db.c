@@ -669,7 +669,7 @@ void delGenericCommand(client *c, int lazy) {
             numdel++;
         }
     }
-    addReplyLongLong(c,numdel);
+    addReplyLongLong(c,numdel); 
 }
 
 void delCommand(client *c) {
@@ -679,6 +679,14 @@ void delCommand(client *c) {
 void unlinkCommand(client *c) {
     delGenericCommand(c,1);
 }
+
+void setEmptyCommand(client *c) {
+	int numdel = 0, j;
+	for (j = 1; j < c->argc; j++)
+		removeEvictKey(c->argv[j], c->db->id, 1);
+	addReply(c, shared.ok);
+}
+
 
 /* EXISTS key1 key2 ... key_N.
  * Return value is the number of keys existing. */
@@ -1336,6 +1344,22 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
+}
+
+void propagateEmpty(redisDb *db, robj *key) {
+	robj *argv[2];
+
+	argv[0] = shared.setempty;
+	argv[1] = key;
+	incrRefCount(argv[0]);
+	incrRefCount(argv[1]);
+
+	if (server.aof_state != AOF_OFF)
+		feedAppendOnlyFile(server.setEmptyCommand, db->id, argv, 2);
+	replicationFeedSlaves(server.slaves, db->id, argv, 2);
+
+	decrRefCount(argv[0]);
+	decrRefCount(argv[1]);
 }
 
 /* Check if the key is expired. */

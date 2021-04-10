@@ -33,7 +33,11 @@
 #include "server.h"
 #include "bio.h"
 #include "atomicvar.h"
+#include "db_cluster.h"
+#include "dbio.h"
 
+size_t lazyfreeGetFreeEffort(robj *obj); 
+void createDumpPayload(rio *payload, robj *o, robj *key); 
 /* ----------------------------------------------------------------------------
  * Data structures
  * --------------------------------------------------------------------------*/
@@ -41,7 +45,7 @@
 /* To improve the quality of the LRU approximation we take a set of keys
  * that are good candidate for eviction across freeMemoryIfNeeded() calls.
  *
- * Entries inside the eviction pool are taken ordered by idle time, putting
+ * Entries inside the eviciton pool are taken ordered by idle time, putting
  * greater idle times to the right (ascending order).
  *
  * When an LFU policy is used instead, a reverse frequency indication is used
@@ -185,7 +189,13 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
          * idle just because the code initially handled LRU, but is in fact
          * just a score where an higher score means better candidate. */
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+			// LRU策略时忽略淘汰带有过期时间的KEY
+			dictEntry *tmpde = dictFind(server.db[dbid].expires , key);
+			if(tmpde)
+				continue;
             idle = estimateObjectIdleTime(o);
+			if(idle <= LRU_EVICT_RESOLUTION || o->lru == 0 || o == shared.emptyvalue)
+				continue;
         } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             /* When we use an LRU policy, we sort the keys by idle time
              * so that we expire keys starting from greater idle time.
@@ -242,7 +252,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
         /* Try to reuse the cached SDS string allocated in the pool entry,
          * because allocating and deallocating this object is costly
          * (according to the profiler, not my fantasy. Remember:
-         * premature optimization bla bla bla. */
+         * premature optimizbla bla bla bla. */
         int klen = sdslen(key);
         if (klen > EVPOOL_CACHED_SDS_SIZE) {
             pool[k].key = sdsdup(key);
@@ -342,7 +352,7 @@ unsigned long LFUDecrAndReturn(robj *o) {
 }
 
 /* ----------------------------------------------------------------------------
- * The external API for eviction: freeMemoryIfNeeded() is called by the
+ * The external API for eviction: freeMemroyIfNeeded() is called by the
  * server when there is data to add in order to make space if needed.
  * --------------------------------------------------------------------------*/
 
@@ -441,192 +451,179 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  *
  * The function returns C_OK if we are under the memory limit or if we
  * were over the limit, but the attempt to free memory was successful.
- * Otherwise if we are over the memory limit, but not enough memory
+ * Otehrwise if we are over the memory limit, but not enough memory
  * was freed to return back under the limit, the function returns C_ERR. */
 int freeMemoryIfNeeded(void) {
-    int keys_freed = 0;
-    /* By default replicas should ignore maxmemory
-     * and just be masters exact copies. */
-    if (server.masterhost && server.repl_slave_ignore_maxmemory) return C_OK;
+	int keys_freed = 0;
+	/* By default replicas should ignore maxmemory
+	* and just be masters exact copies. */
+	if (server.masterhost && server.repl_slave_ignore_maxmemory) return C_OK;
+	size_t mem_reported, mem_tofree, mem_freed;
+	mstime_t latency/*, eviction_latency*/, lazyfree_latency;
+	/*long long delta;*/
+	int result = C_ERR;
+	/* When clients are paused the dataset should be static not just from the
+	* POV of clients not being able to write, but also from the POV of
+	* expires and evictions of keys not being performed. */
+	if (clientsArePaused()) return C_OK;
+	if (getMaxmemoryState(&mem_reported, NULL, &mem_tofree, NULL) == C_OK)
+		return C_OK;
+	//if (server.db_cluster->request_count > 0)
+	//	return C_OK; 
+	latencyStartMonitor(latency);
+	struct evictionPoolEntry *pool = EvictionPoolLRU;
+	mem_freed = 0;
+	while (mem_freed < mem_tofree) {
+		int k, i;
+		sds bestkey = NULL;
+		int bestdbid;
+		redisDb *db;
+		dictEntry *de;
+		while (bestkey == NULL) {
+			unsigned long total_keys = 0, keys;
 
-    size_t mem_reported, mem_tofree, mem_freed;
-    mstime_t latency, eviction_latency, lazyfree_latency;
-    long long delta;
-    int slaves = listLength(server.slaves);
-    int result = C_ERR;
+			/* We don't want to make local-db choices when expiring keys,
+			* so to start populate the eviction pool sampling keys from
+			* every DB. */
+			for (i = 0; i < server.dbnum; i++) {
+				db = server.db + i;
+				if ((keys = dictSize(db->dict)) != 0) {
+					evictionPoolPopulate(i, db->dict, db->dict, pool);
+					total_keys += keys;
+				}
+			}
+			if (!total_keys) break; /* No keys to evict. */
 
-    /* When clients are paused the dataset should be static not just from the
-     * POV of clients not being able to write, but also from the POV of
-     * expires and evictions of keys not being performed. */
-    if (clientsArePaused()) return C_OK;
-    if (getMaxmemoryState(&mem_reported,NULL,&mem_tofree,NULL) == C_OK)
-        return C_OK;
+									/* Go backward from best to worst element to evict. */
+			for (k = EVPOOL_SIZE - 1; k >= 0; k--) {
+				if (pool[k].key == NULL) continue;
+				bestdbid = pool[k].dbid;
 
-    mem_freed = 0;
+				if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
+					de = dictFind(server.db[pool[k].dbid].dict,
+						pool[k].key);
+				}
+				else {
+					de = dictFind(server.db[pool[k].dbid].expires,
+						pool[k].key);
+				}
 
-    latencyStartMonitor(latency);
-    if (server.maxmemory_policy == MAXMEMORY_NO_EVICTION)
-        goto cant_free; /* We need to free memory, but policy forbids. */
+				/* Remove the entry from the pool. */
+				if (pool[k].key != pool[k].cached)
+					sdsfree(pool[k].key);
+				pool[k].key = NULL;
+				pool[k].idle = 0;
 
-    while (mem_freed < mem_tofree) {
-        int j, k, i;
-        static unsigned int next_db = 0;
-        sds bestkey = NULL;
-        int bestdbid;
-        redisDb *db;
-        dict *dict;
-        dictEntry *de;
+				/* If the key exists, is our pick. Otherwise it is
+				* a ghost and we need to try the next element. */
+				if (de) {
+					bestkey = dictGetKey(de);
+					break;
+				}
+				else {
+					/* Ghost... Iterate again. */
+				}
+			}
+			if (k < 0) {
+				result = C_OK;
+				goto cant_free;
+			}
+		}
 
-        if (server.maxmemory_policy & (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU) ||
-            server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL)
-        {
-            struct evictionPoolEntry *pool = EvictionPoolLRU;
+		/* dump key */
+		if (bestkey/* && server.maxmemory_policy & (MAXMEMORY_FLAG_LRU*/) {
+			robj *val;
+			rio payload;
+			db = server.db + bestdbid;
+			robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
+			if ((val = lookupKeyRead(db, keyobj)) == NULL) {
+				decrRefCount(keyobj);
+				continue;
+			}
+			val->lru = 0;
+			createDumpPayload(&payload, val, keyobj);
+			dbRequest *dbreq = createDbRequest(REQUEST_WRITE);
+			if (dbreq == NULL) {
+				decrRefCount(keyobj);
+				continue;
+			}
+			dbreq->keyobj = keyobj;
+			dbreq->dbid = bestdbid;
+			char* cmd;
+			int len = redisFormatCommand(&cmd, "SET %b %b", bestkey, sdslen(bestkey), payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr));
+			dbreq->buffer = sdsnewlen(cmd, len);
+			zfree(cmd);
+			sdsfree(payload.io.buffer.ptr);
+			asyncPostDbRequest(dbreq); 
 
-            while(bestkey == NULL) {
-                unsigned long total_keys = 0, keys;
+			mem_freed += lazyfreeGetFreeEffort(val);
+			keys_freed++; 
+		}
+		if (keys_freed % 16 == 0)
+			break; 
 
-                /* We don't want to make local-db choices when expiring keys,
-                 * so to start populate the eviction pool sampling keys from
-                 * every DB. */
-                for (i = 0; i < server.dbnum; i++) {
-                    db = server.db+i;
-                    dict = (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) ?
-                            db->dict : db->expires;
-                    if ((keys = dictSize(dict)) != 0) {
-                        evictionPoolPopulate(i, dict, db->dict, pool);
-                        total_keys += keys;
-                    }
-                }
-                if (!total_keys) break; /* No keys to evict. */
-
-                /* Go backward from best to worst element to evict. */
-                for (k = EVPOOL_SIZE-1; k >= 0; k--) {
-                    if (pool[k].key == NULL) continue;
-                    bestdbid = pool[k].dbid;
-
-                    if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        de = dictFind(server.db[pool[k].dbid].dict,
-                            pool[k].key);
-                    } else {
-                        de = dictFind(server.db[pool[k].dbid].expires,
-                            pool[k].key);
-                    }
-
-                    /* Remove the entry from the pool. */
-                    if (pool[k].key != pool[k].cached)
-                        sdsfree(pool[k].key);
-                    pool[k].key = NULL;
-                    pool[k].idle = 0;
-
-                    /* If the key exists, is our pick. Otherwise it is
-                     * a ghost and we need to try the next element. */
-                    if (de) {
-                        bestkey = dictGetKey(de);
-                        break;
-                    } else {
-                        /* Ghost... Iterate again. */
-                    }
-                }
-            }
-        }
-
-        /* volatile-random and allkeys-random policy */
-        else if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM ||
-                 server.maxmemory_policy == MAXMEMORY_VOLATILE_RANDOM)
-        {
-            /* When evicting a random key, we try to evict a key for
-             * each DB, so we use the static 'next_db' variable to
-             * incrementally visit all DBs. */
-            for (i = 0; i < server.dbnum; i++) {
-                j = (++next_db) % server.dbnum;
-                db = server.db+j;
-                dict = (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) ?
-                        db->dict : db->expires;
-                if (dictSize(dict) != 0) {
-                    de = dictGetRandomKey(dict);
-                    bestkey = dictGetKey(de);
-                    bestdbid = j;
-                    break;
-                }
-            }
-        }
-
-        /* Finally remove the selected key. */
-        if (bestkey) {
-            db = server.db+bestdbid;
-            robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-            propagateExpire(db,keyobj,server.lazyfree_lazy_eviction);
-            /* We compute the amount of memory freed by db*Delete() alone.
-             * It is possible that actually the memory needed to propagate
-             * the DEL in AOF and replication link is greater than the one
-             * we are freeing removing the key, but we can't account for
-             * that otherwise we would never exit the loop.
-             *
-             * Same for CSC invalidation messages generated by signalModifiedKey.
-             *
-             * AOF and Output buffer memory will be freed eventually so
-             * we only care about memory used by the key space. */
-            delta = (long long) zmalloc_used_memory();
-            latencyStartMonitor(eviction_latency);
-            if (server.lazyfree_lazy_eviction)
-                dbAsyncDelete(db,keyobj);
-            else
-                dbSyncDelete(db,keyobj);
-            latencyEndMonitor(eviction_latency);
-            latencyAddSampleIfNeeded("eviction-del",eviction_latency);
-            delta -= (long long) zmalloc_used_memory();
-            mem_freed += delta;
-            server.stat_evictedkeys++;
-            signalModifiedKey(NULL,db,keyobj);
-            notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
-                keyobj, db->id);
-            decrRefCount(keyobj);
-            keys_freed++;
-
-            /* When the memory to free starts to be big enough, we may
-             * start spending so much time here that is impossible to
-             * deliver data to the slaves fast enough, so we force the
-             * transmission here inside the loop. */
-            if (slaves) flushSlavesOutputBuffers();
-
-            /* Normally our stop condition is the ability to release
-             * a fixed, pre-computed amount of memory. However when we
-             * are deleting objects in another thread, it's better to
-             * check, from time to time, if we already reached our target
-             * memory, since the "mem_freed" amount is computed only
-             * across the dbAsyncDelete() call, while the thread can
-             * release the memory all the time. */
-            if (server.lazyfree_lazy_eviction && !(keys_freed % 16)) {
-                if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
-                    /* Let's satisfy our stop condition. */
-                    mem_freed = mem_tofree;
-                }
-            }
-        } else {
-            goto cant_free; /* nothing to free... */
-        }
-    }
-    result = C_OK;
+	}
+	result = C_OK;
 
 cant_free:
-    /* We are here if we are not able to reclaim memory. There is only one
-     * last thing we can try: check if the lazyfree thread has jobs in queue
-     * and wait... */
-    if (result != C_OK) {
-        latencyStartMonitor(lazyfree_latency);
-        while(bioPendingJobsOfType(BIO_LAZY_FREE)) {
-            if (getMaxmemoryState(NULL,NULL,NULL,NULL) == C_OK) {
-                result = C_OK;
-                break;
-            }
-            usleep(1000);
-        }
-        latencyEndMonitor(lazyfree_latency);
-        latencyAddSampleIfNeeded("eviction-lazyfree",lazyfree_latency);
-    }
-    latencyEndMonitor(latency);
-    latencyAddSampleIfNeeded("eviction-cycle",latency);
-    return result;
+	/* We are here if we are not able to reclaim memory. There is only one
+	* last thing we can try: check if the lazyfree thread has jobs in queue
+	* and wait... */
+	if (result != C_OK) {
+		latencyStartMonitor(lazyfree_latency);
+		while (bioPendingJobsOfType(BIO_LAZY_FREE)) {
+			if (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_OK) {
+				result = C_OK;
+				break;
+			}
+			usleep(1000);
+		}
+		latencyEndMonitor(lazyfree_latency);
+		latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
+	}
+	latencyEndMonitor(latency);
+	latencyAddSampleIfNeeded("eviction-cycle", latency);
+	return result;
+}
+void removeEvictKey(robj *keyobj ,int dbid, int force)
+{
+	mstime_t  eviction_latency;
+	if (keyobj == NULL)
+		return;
+	/* Finally remove the selected key. */
+	redisDb *db = server.db + dbid;
+	dictEntry *de = dictFind(db->dict, keyobj->ptr); 
+	if (de == NULL)
+		return; 
+	robj *val = dictGetVal(de); 
+	if (!force && (val == NULL || val->lru > 0)) {
+		/* 在postDbRequest之前已经将val->lru设置为0，此时如果大于0，说明在postDbRequest之后这期间这个key被访问过。
+		 * 为了保证删除key时db里的数据是最新的，此时就不能删除这个key了，需要等待下一次被淘汰时再删。 */
+		return;
+	}
+	/* 通知aof和slaves.*/
+	propagateEmpty(db, keyobj); 
+	/* propagateExpire(db, keyobj, server.lazyfree_lazy_eviction);*/
+	latencyStartMonitor(eviction_latency);
+	/* 不考虑配置的删除策略, 强制异步执行.*/
+	dbAsyncDelete(db, keyobj);
+	/* 设置为空键 */
+	dictAdd(db->dict, sdsdup(keyobj->ptr), shared.emptyvalue); 
+	if (server.cluster_enabled) 
+		slotToKeyAdd(keyobj->ptr);
+	signalModifiedKey(NULL, db, keyobj);
+	latencyEndMonitor(eviction_latency);
+	latencyAddSampleIfNeeded("eviction-del", eviction_latency);
+	server.stat_evictedkeys++;
+	notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted",
+		keyobj, db->id);
+	/*decrRefCount(keyobj);*/
+
+	/* When the memory to free starts to be big enough, we may
+	* start spending so much time here that is impossible to
+	* deliver data to the slaves fast enough, so we force the
+	* transmission here inside the loop. */
+	flushSlavesOutputBuffers();
 }
 
 /* This is a wrapper for freeMemoryIfNeeded() that only really calls the

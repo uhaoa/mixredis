@@ -86,6 +86,7 @@ typedef long long ustime_t; /* microsecond time type. */
 /* Error codes */
 #define C_OK                    0
 #define C_ERR                   -1
+#define C_LOAD                  -2
 
 /* Static server configuration */
 #define CONFIG_DEFAULT_HZ        10             /* Time interrupt calls/sec. */
@@ -275,7 +276,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define BLOCKED_MODULE 3  /* Blocked by a loadable module. */
 #define BLOCKED_STREAM 4  /* XREAD. */
 #define BLOCKED_ZSET 5    /* BZPOP et al. */
-#define BLOCKED_NUM 6     /* Number of blocked states. */
+#define BLOCKED_DB_LOAD 6    
+#define BLOCKED_NUM 7     /* Number of blocked states. */
 
 /* Client request types */
 #define PROTO_REQ_INLINE 1
@@ -462,6 +464,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define serverAssert(_e) ((_e)?(void)0 : (_serverAssert(#_e,__FILE__,__LINE__),_exit(1)))
 #define serverPanic(...) _serverPanic(__FILE__,__LINE__,__VA_ARGS__),_exit(1)
 
+/* db cluster */
+#define MAX_DB_ENTRY_POINTS 255 
+
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
@@ -488,6 +493,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
  * encoding version. */
 #define OBJ_MODULE 5    /* Module object. */
 #define OBJ_STREAM 6    /* Stream object. */
+
+#define OBJ_EMPTY 128    /* Stream object. */
 
 /* Extract encver / signature from a module type ID. */
 #define REDISMODULE_TYPE_ENCVER_BITS 10
@@ -620,6 +627,7 @@ typedef struct RedisModuleDigest {
 #define LRU_BITS 24
 #define LRU_CLOCK_MAX ((1<<LRU_BITS)-1) /* Max value of obj->lru */
 #define LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
+#define LRU_EVICT_RESOLUTION 5000 
 
 #define OBJ_SHARED_REFCOUNT INT_MAX     /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT (INT_MAX-1) /* Object allocated in the stack. */
@@ -845,6 +853,7 @@ typedef struct client {
     int slave_capa;         /* Slave capabilities: SLAVE_CAPA_* bitwise OR. */
     multiState mstate;      /* MULTI/EXEC state */
     int btype;              /* Type of blocking op if CLIENT_BLOCKED. */
+	int db_load_req_num;
     blockingState bpop;     /* blocking state */
     long long woff;         /* Last write global replication offset. */
     list *watched_keys;     /* Keys WATCHED for MULTI/EXEC CAS */
@@ -901,11 +910,12 @@ struct sharedObjectsStruct {
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
     *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec,
+    *multi, *exec, *setempty,
     *select[PROTO_SHARED_SELECT_CMDS],
     *integers[OBJ_SHARED_INTEGERS],
     *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
-    *bulkhdr[OBJ_SHARED_BULKHDR_LEN];  /* "$<value>\r\n" */
+    *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
+	*emptyvalue;
     sds minstring, maxstring;
 };
 
@@ -1044,6 +1054,24 @@ typedef struct redisTLSContextConfig {
 } redisTLSContextConfig;
 
 /*-----------------------------------------------------------------------------
+* db cluster  Configuration
+*----------------------------------------------------------------------------*/
+struct dbCluster;
+
+typedef struct dbClusterEntryPoint {
+	char *host;
+	int port;
+	char *socket;
+	char *address;
+} dbClusterEntryPoint;
+
+typedef struct dbClusterConfig {
+	int db_entry_points_count;
+	dbClusterEntryPoint db_entry_points[MAX_DB_ENTRY_POINTS];
+} dbClusterConfig;
+
+
+/*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
 
@@ -1149,7 +1177,7 @@ struct redisServer {
                         *lpopCommand, *rpopCommand, *zpopminCommand,
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand, *rpoplpushCommand;
+                        *xgroupCommand, *rpoplpushCommand , *setEmptyCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -1487,6 +1515,11 @@ struct redisServer {
     char *bio_cpulist; /* cpu affinity list of bio thread. */
     char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
     char *bgsave_cpulist; /* cpu affinity list of bgsave process. */
+	/* db cluster */
+	struct dbClusterConfig	db_cluster_config;
+	struct dbCluster *db_cluster;
+	uint64_t next_request_id;
+	aeEventLoop *db_el;
 };
 
 typedef struct pubsubPattern {
@@ -2039,8 +2072,11 @@ int prepareForShutdown(int flags);
 #ifdef __GNUC__
 void serverLog(int level, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
+void serverDbLog(int level, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 #else
 void serverLog(int level, const char *fmt, ...);
+void serverDbLog(int level, const char *fmt, ...);
 #endif
 void serverLogRaw(int level, const char *msg);
 void serverLogFromHandler(int level, const char *msg);
@@ -2287,6 +2323,7 @@ void psetexCommand(client *c);
 void getCommand(client *c);
 void delCommand(client *c);
 void unlinkCommand(client *c);
+void setEmptyCommand(client *c);
 void existsCommand(client *c);
 void setbitCommand(client *c);
 void getbitCommand(client *c);

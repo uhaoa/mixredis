@@ -431,6 +431,31 @@ void loadServerConfigFromString(char *config) {
             for (j = 0; j < addresses; j++)
                 server.bindaddr[j] = zstrdup(argv[j+1]);
             server.bindaddr_count = addresses;
+		} else if (!strcasecmp(argv[0], "db-entry-point") && argc >= 1) {
+			if (server.db_cluster_config.db_entry_points_count >= MAX_DB_ENTRY_POINTS) {
+				err = "Too many db-entry-point specified"; goto loaderr;
+			}
+			dbClusterEntryPoint *entry_point =
+				&(server.db_cluster_config.db_entry_points[server.db_cluster_config.db_entry_points_count++]);
+			entry_point->host = NULL;
+			entry_point->socket = NULL;
+			entry_point->port = 0;
+			sds address = argv[1];
+			entry_point->address = zstrdup(address);
+			int size = strlen(address);
+			char *p = strchr(address, ':');
+			if (!p) entry_point->socket = zstrdup(address);
+			else {
+				if (p == address) entry_point->host = zstrdup("localhost");
+				else {
+					*p = '\0';
+					entry_point->host = zstrdup(address);
+				}
+				if (p - address != size) entry_point->port = atoi(++p);
+				if (entry_point->port == 0) {
+					err = "db-entry-point port eror"; goto loaderr;
+				}
+			}
         } else if (!strcasecmp(argv[0],"unixsocketperm") && argc == 2) {
             errno = 0;
             server.unixsocketperm = (mode_t)strtol(argv[1], NULL, 8);

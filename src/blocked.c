@@ -161,6 +161,10 @@ void unblockClient(client *c) {
     } else if (c->btype == BLOCKED_MODULE) {
         if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
+	} else if (c->btype == BLOCKED_DB_LOAD) {
+		c->db_load_req_num--;
+		if (c->db_load_req_num > 0)
+			return;
     } else {
         serverPanic("Unknown btype in unblockClient().");
     }

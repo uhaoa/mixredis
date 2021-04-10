@@ -55,6 +55,17 @@ robj *createObject(int type, void *ptr) {
     return o;
 }
 
+robj *createEmptyObject() {
+	robj *o = zmalloc(sizeof(*o));
+	o->type = OBJ_EMPTY;
+	o->encoding = 0;
+	o->ptr = NULL;
+	o->refcount = OBJ_SHARED_REFCOUNT;
+	o->lru = 0;
+	return o;
+}
+
+
 /* Set a special refcount in the object to make it "shared":
  * incrRefCount and decrRefCount() will test for this special refcount
  * and will not touch the object. This way it is free to access shared

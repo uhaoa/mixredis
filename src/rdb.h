@@ -161,5 +161,7 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val);
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi);
 int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
+int rdbSaveEmptyFlag(rio *rdb, unsigned char flag);
+int rdbLoadEmptyFlag(rio *rdb);
 
 #endif

@@ -34,6 +34,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "mt19937-64.h"
+#include "dbio.h"
 
 #include <time.h>
 #include <signal.h>
@@ -225,6 +226,10 @@ struct redisCommand redisCommandTable[] = {
     {"unlink",unlinkCommand,-2,
      "write fast @keyspace",
      0,NULL,1,-1,1,0,0,0},
+
+	 { "setempty",setEmptyCommand,-2,
+	 "write @keyspace",
+	 0,NULL,1,-1,1,0,0,0,1 },
 
     {"exists",existsCommand,-2,
      "read-only fast @keyspace",
@@ -1084,6 +1089,19 @@ void serverLog(int level, const char *fmt, ...) {
     va_end(ap);
 
     serverLogRaw(level,msg);
+}
+
+void serverDbLog(int level, const char *fmt, ...) {
+	va_list ap;
+	char msg[LOG_MAX_LEN] = { "[DBLOG]" };
+
+	if ((level & 0xff) < server.verbosity) return;
+
+	va_start(ap, fmt);
+	vsnprintf(msg + 7, sizeof(msg) - 7, fmt, ap);
+	va_end(ap);
+
+	serverLogRaw(level, msg);
 }
 
 /* Log a fixed message without printf-alike capabilities, in a way that is
@@ -2095,6 +2113,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                           0,
                           &ei);
 
+	/* 处理db的回复 */
+	processDbResponse();
+
     server.cronloops++;
     return 1000/server.hz;
 }
@@ -2462,7 +2483,7 @@ void initServerConfig(void) {
     server.xclaimCommand = lookupCommandByCString("xclaim");
     server.xgroupCommand = lookupCommandByCString("xgroup");
     server.rpoplpushCommand = lookupCommandByCString("rpoplpush");
-
+	server.setEmptyCommand = lookupCommandByCString("setempty");
     /* Debugging */
     server.assert_failed = "<no assertion failed>";
     server.assert_file = "<no file>";
@@ -2475,6 +2496,9 @@ void initServerConfig(void) {
      * script to the slave / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via redis.conf. */
     server.lua_always_replicate_commands = 1;
+
+	/* db cluster config */
+	server.db_cluster_config.db_entry_points_count = 0;
 
     initConfigValues();
 }
@@ -2971,6 +2995,17 @@ void initServer(void) {
     server.aof_last_write_status = C_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
+
+	// init db cluster
+	initDbCluster();
+	server.db_el = aeCreateEventLoop(server.maxclients + CONFIG_FDSET_INCR);
+	if (server.db_el == NULL) {
+		serverLog(LL_WARNING,
+			"Failed creating the db event loop. Error message: '%s'",
+			strerror(errno));
+		exit(1);
+	}
+	server.next_request_id = 1;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
