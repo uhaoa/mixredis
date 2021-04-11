@@ -635,6 +635,12 @@ void loadServerConfigFromString(char *config) {
     }
 
     sdsfreesplitres(lines,totlines);
+
+	/* db cluster config */
+	if (server.db_cluster_config.db_entry_points_count == 0) {
+		err = "proxy_entry_points_count must > 0 !";
+		goto loaderr;
+	}
     return;
 
 loaderr:

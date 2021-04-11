@@ -110,16 +110,18 @@ void asyncPostDbResponse(dbRequest * res)
 
 int tryReadEmptyKeys(client *c)
 {
-	int *keyindex, numkeys, emptynums = 0;
+	int emptynums = 0;
 	struct redisCommand *cmd = lookupCommand(c->argv[0]->ptr);	
 	if (cmd == NULL)
 		return 0; 
-	if (cmd->proc == restoreCommand && !nodeIsMaster(server.cluster->myself)) {
+	if (cmd->proc == restoreCommand && !nodeIsMaster(server.cluster->myself)) 
 		return 0; 
-	}
-	keyindex = getKeysFromCommand(cmd, c->argv, c->argc, &numkeys);
-	for (int i = 0; i < numkeys; i++) {
-		robj *thiskey = c->argv[keyindex[i]];
+
+	getKeysResult result = GETKEYS_RESULT_INIT;
+	if (getKeysFromCommand(cmd, c->argv, c->argc, &result) == 0)
+		return 0;
+	for (int i = 0; i < result.numkeys; i++) {
+		robj *thiskey = c->argv[result.keys[i]];
 		robj *obj = lookupKeyRead(c->db, thiskey); 
 		if (obj == shared.emptyvalue) {
 			emptynums++; 

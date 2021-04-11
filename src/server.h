@@ -494,7 +494,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define OBJ_MODULE 5    /* Module object. */
 #define OBJ_STREAM 6    /* Stream object. */
 
-#define OBJ_EMPTY 128    /* Stream object. */
+#define OBJ_EMPTY 10    /* Empty object. */
 
 /* Extract encver / signature from a module type ID. */
 #define REDISMODULE_TYPE_ENCVER_BITS 10
@@ -2166,6 +2166,7 @@ void initConfigValues();
 /* db.c -- Keyspace access API */
 int removeExpire(redisDb *db, robj *key);
 void propagateExpire(redisDb *db, robj *key, int lazy);
+void propagateEmpty(redisDb *db, robj *key);
 int expireIfNeeded(redisDb *db, robj *key);
 long long getExpire(redisDb *db, robj *key);
 void setExpire(client *c, redisDb *db, robj *key, long long when);

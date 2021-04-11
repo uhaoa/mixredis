@@ -229,7 +229,7 @@ struct redisCommand redisCommandTable[] = {
 
 	 { "setempty",setEmptyCommand,-2,
 	 "write @keyspace",
-	 0,NULL,1,-1,1,0,0,0,1 },
+	 0,NULL,1,-1,1,0,0,0},
 
     {"exists",existsCommand,-2,
      "read-only fast @keyspace",
@@ -1372,6 +1372,15 @@ dictType hashDictType = {
     dictSdsDestructor           /* val destructor */
 };
 
+dictType emptyKeyDictType = {
+	dictSdsHash,                /* hash function */
+	NULL,                       /* key dup */
+	NULL,                       /* val dup */
+	dictSdsKeyCompare,          /* key compare */
+	dictSdsDestructor,          /* key destructor */
+	NULL						/* val destructor */
+};
+
 /* Keylist hash table type has unencoded redis objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to
  * map swapped keys to a list of clients waiting for this keys to be loaded. */
@@ -2350,6 +2359,7 @@ void createSharedObjects(void) {
     shared.zpopmax = createStringObject("ZPOPMAX",7);
     shared.multi = createStringObject("MULTI",5);
     shared.exec = createStringObject("EXEC",4);
+	shared.setempty = createStringObject("SETEMPTY", 8);
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2367,6 +2377,7 @@ void createSharedObjects(void) {
      * string in string comparisons for the ZRANGEBYLEX command. */
     shared.minstring = sdsnew("minstring");
     shared.maxstring = sdsnew("maxstring");
+	shared.emptyvalue = createEmptyObject();
 }
 
 void initServerConfig(void) {
@@ -3089,6 +3100,7 @@ void InitServerLast() {
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
+	dbioInit(); 
 }
 
 /* Parse the flags string description 'strflags' and set them to the

@@ -59,7 +59,7 @@ robj *createEmptyObject() {
 	robj *o = zmalloc(sizeof(*o));
 	o->type = OBJ_EMPTY;
 	o->encoding = 0;
-	o->ptr = NULL;
+	o->ptr = "obj_empty";
 	o->refcount = OBJ_SHARED_REFCOUNT;
 	o->lru = 0;
 	return o;
@@ -379,6 +379,7 @@ void decrRefCount(robj *o) {
         case OBJ_HASH: freeHashObject(o); break;
         case OBJ_MODULE: freeModuleObject(o); break;
         case OBJ_STREAM: freeStreamObject(o); break;
+		case OBJ_EMPTY:  break;
         default: serverPanic("Unknown object type"); break;
         }
         zfree(o);

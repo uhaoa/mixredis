@@ -552,7 +552,7 @@ int freeMemoryIfNeeded(void) {
 			char* cmd;
 			int len = redisFormatCommand(&cmd, "SET %b %b", bestkey, sdslen(bestkey), payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr));
 			dbreq->buffer = sdsnewlen(cmd, len);
-			zfree(cmd);
+			free(cmd);
 			sdsfree(payload.io.buffer.ptr);
 			asyncPostDbRequest(dbreq); 
 
@@ -596,6 +596,8 @@ void removeEvictKey(robj *keyobj ,int dbid, int force)
 	if (de == NULL)
 		return; 
 	robj *val = dictGetVal(de); 
+	if (val == shared.emptyvalue)
+		return; 
 	if (!force && (val == NULL || val->lru > 0)) {
 		/* 在postDbRequest之前已经将val->lru设置为0，此时如果大于0，说明在postDbRequest之后这期间这个key被访问过。
 		 * 为了保证删除key时db里的数据是最新的，此时就不能删除这个key了，需要等待下一次被淘汰时再删。 */
