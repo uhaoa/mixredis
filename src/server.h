@@ -902,20 +902,19 @@ struct moduleLoadQueueEntry {
 };
 
 struct sharedObjectsStruct {
-    robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *pong, *space,
-    *colon, *queued, *null[4], *nullarray[4], *emptymap[4], *emptyset[4],
-    *emptyarray, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
-    *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
-    *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
-    *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
-    *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
-    *rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-    *multi, *exec, *setempty,
-    *select[PROTO_SHARED_SELECT_CMDS],
-    *integers[OBJ_SHARED_INTEGERS],
-    *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
-    *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
-	*emptyvalue;
+	robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *pong, *space,
+		*colon, *queued, *null[4], *nullarray[4], *emptymap[4], *emptyset[4],
+		*emptyarray, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
+		*outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
+		*masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
+		*busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
+		*unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
+		*rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
+		*multi, *exec, *setempty, *emptyvalue,
+		*select[PROTO_SHARED_SELECT_CMDS],
+		*integers[OBJ_SHARED_INTEGERS],
+		*mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
+		*bulkhdr[OBJ_SHARED_BULKHDR_LEN];  /* "$<value>\r\n" */
     sds minstring, maxstring;
 };
 
@@ -1872,6 +1871,7 @@ int collateStringObjects(robj *a, robj *b);
 int equalStringObjects(robj *a, robj *b);
 unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o);
+robj *createEmptyObject(); 
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Synchronous I/O with timeout */

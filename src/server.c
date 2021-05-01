@@ -2360,6 +2360,7 @@ void createSharedObjects(void) {
     shared.multi = createStringObject("MULTI",5);
     shared.exec = createStringObject("EXEC",4);
 	shared.setempty = createStringObject("SETEMPTY", 8);
+	shared.emptyvalue = createEmptyObject();
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2377,7 +2378,7 @@ void createSharedObjects(void) {
      * string in string comparisons for the ZRANGEBYLEX command. */
     shared.minstring = sdsnew("minstring");
     shared.maxstring = sdsnew("maxstring");
-	shared.emptyvalue = createEmptyObject();
+	
 }
 
 void initServerConfig(void) {
