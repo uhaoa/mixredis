@@ -231,6 +231,14 @@ struct redisCommand redisCommandTable[] = {
 	 "write @keyspace",
 	 0,NULL,1,-1,1,0,0,0},
 
+	 { "dbload",dbloadCommand,-2,
+	 "write @keyspace",
+	 0,NULL,3,-1,1,0,0,0 },
+
+	 { "dbloadreply",dbloadreplyCommand ,-2,
+	 "write @keyspace",
+	 0,NULL,1,-1,1,0,0,0 },
+
     {"exists",existsCommand,-2,
      "read-only fast @keyspace",
      0,NULL,1,-1,1,0,0,0},
@@ -2361,6 +2369,8 @@ void createSharedObjects(void) {
     shared.exec = createStringObject("EXEC",4);
 	shared.setempty = createStringObject("SETEMPTY", 8);
 	shared.emptyvalue = createEmptyObject();
+	shared.dbload = createStringObject("DBLOAD", 6);
+	shared.dbloadreply = createStringObject("DBLOADREPLY", 11);
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] =
             makeObjectShared(createObject(OBJ_STRING,(void*)(long)j));
@@ -2496,6 +2506,8 @@ void initServerConfig(void) {
     server.xgroupCommand = lookupCommandByCString("xgroup");
     server.rpoplpushCommand = lookupCommandByCString("rpoplpush");
 	server.setEmptyCommand = lookupCommandByCString("setempty");
+	server.dbloadCommand = lookupCommandByCString("dbload");
+	server.dbloadreplyCommand = lookupCommandByCString("dbloadreply");
     /* Debugging */
     server.assert_failed = "<no assertion failed>";
     server.assert_file = "<no file>";

@@ -112,7 +112,7 @@ int tryReadEmptyKeys(client *c)
 {
 	int emptynums = 0;
 	struct redisCommand *cmd = lookupCommand(c->argv[0]->ptr);	
-	if (cmd == NULL)
+	if (cmd == NULL || cmd->proc == dbloadCommand || cmd->proc == dbloadreplyCommand)
 		return 0; 
 	if (cmd->proc == restoreCommand && !nodeIsMaster(server.cluster->myself)) 
 		return 0; 
@@ -133,18 +133,32 @@ int tryReadEmptyKeys(client *c)
 				dbreq->buffer = sdscatprintf(sdsempty(), "*2\r\n$3\r\nget\r\n$%i\r\n%s\r\n", sdslen(thiskey->ptr), thiskey->ptr);
 				asyncPostDbRequest(dbreq);
 			}
+			else {
+				// 通知master
+				robj *argv[4];
+				argv[0] = shared.dbload;
+				argv[1] = createStringObjectFromLongLongForValue(c->db->id);
+				argv[2] = createStringObjectFromLongLongForValue(c->id);
+				argv[3] = thiskey;
+				
+				server.master->flags |= CLIENT_MASTER_FORCE_REPLY;
+				addReplyArrayLen(server.master, 4);
+				addReplyBulk(server.master, argv[0]);
+				addReplyBulk(server.master, argv[1]);
+				addReplyBulk(server.master, argv[2]);
+				addReplyBulk(server.master, argv[3]);
+				server.master->flags &= ~CLIENT_MASTER_FORCE_REPLY;
+
+				decrRefCount(argv[1]); 
+				decrRefCount(argv[2]);
+			}
 		}
 	}
 	if (emptynums > 0) {
-		if (nodeIsMaster(server.cluster->myself)) {
+		if (true/*nodeIsMaster(server.cluster->myself)*/) {
 			c->db_load_req_num = emptynums;
 			blockClient(c, BLOCKED_DB_LOAD);
 			return 1; 
-		}
-		else {
-			// 临时处理
-			addReply(c, shared.err);
-			return 2;
 		}
 	}
 	return 0; 
@@ -171,6 +185,7 @@ void processDbResponse()
 		}
 		else if(req->request_type == REQUEST_READ) {
 			redisDb *db = server.db + req->dbid;
+			assert(db);
 			robj* obj = lookupKeyWrite(db,req->keyobj);
 			if (obj && obj == shared.emptyvalue && req->value_obj) {
 				/* remove the old key.*/
@@ -193,7 +208,22 @@ void processDbResponse()
 				serverDbLog(LL_WARNING, "read response error."); 
 			}
 			client* c = lookupClientByID(req->client_id);
-			if (c && (c->flags & CLIENT_BLOCKED) && c->btype == BLOCKED_DB_LOAD) {
+			if(!c) continue;
+			if (c->flags & CLIENT_SLAVE) {
+				// 通知slave 
+				robj *argv[2];
+				argv[0] = shared.dbloadreply;
+				argv[1] = createStringObjectFromLongLongForValue(req->param_ex);
+
+				addReplyArrayLen(c, 2);
+				addReplyBulk(c, argv[0]);
+				addReplyBulk(c, argv[1]);
+
+				decrRefCount(argv[1]);
+
+				flushSlavesOutputBuffers();
+			}
+			else if ((c->flags & CLIENT_BLOCKED) && c->btype == BLOCKED_DB_LOAD) {
 				unblockClient(c);
 			}
 		}

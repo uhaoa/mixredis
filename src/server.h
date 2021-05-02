@@ -910,7 +910,7 @@ struct sharedObjectsStruct {
 		*busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
 		*unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink,
 		*rpop, *lpop, *lpush, *rpoplpush, *zpopmin, *zpopmax, *emptyscan,
-		*multi, *exec, *setempty, *emptyvalue,
+		*multi, *exec, *setempty, *emptyvalue,*dbload,*dbloadreply,
 		*select[PROTO_SHARED_SELECT_CMDS],
 		*integers[OBJ_SHARED_INTEGERS],
 		*mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
@@ -1176,7 +1176,7 @@ struct redisServer {
                         *lpopCommand, *rpopCommand, *zpopminCommand,
                         *zpopmaxCommand, *sremCommand, *execCommand,
                         *expireCommand, *pexpireCommand, *xclaimCommand,
-                        *xgroupCommand, *rpoplpushCommand , *setEmptyCommand;
+                        *xgroupCommand, *rpoplpushCommand , *setEmptyCommand , *dbloadCommand , *dbloadreplyCommand;
     /* Fields used only for stats */
     time_t stat_starttime;          /* Server start time */
     long long stat_numcommands;     /* Number of processed commands */
@@ -2325,6 +2325,8 @@ void getCommand(client *c);
 void delCommand(client *c);
 void unlinkCommand(client *c);
 void setEmptyCommand(client *c);
+void dbloadCommand(client *c);
+void dbloadreplyCommand(client *c);
 void existsCommand(client *c);
 void setbitCommand(client *c);
 void getbitCommand(client *c);
@@ -2513,6 +2515,7 @@ void xtrimCommand(client *c);
 void lolwutCommand(client *c);
 void aclCommand(client *c);
 void stralgoCommand(client *c);
+void dbloadCommand(client* c);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__ ((deprecated));

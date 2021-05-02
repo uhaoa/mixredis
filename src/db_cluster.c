@@ -1435,6 +1435,7 @@ dbRequest *createDbRequest(int request_type)
 	req->request_type = request_type; 
 	req->value_obj = NULL; 
 	req->client_id = 0; 
+	req->param_ex = 0; 
 	req->requests_pending_lnode = NULL;
 	req->requests_to_send_lnode = NULL;
 	server.db_cluster->request_count++; 

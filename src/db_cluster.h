@@ -104,6 +104,8 @@ typedef struct dbRequest {
 	listNode *requests_pending_lnode; /* Pointer to node in
 									  * redisClusterConnection->
 									  * requests_pending list */
+
+	uint64_t param_ex; 
 } dbRequest;
 
 typedef struct dbCluster {

@@ -30,9 +30,12 @@
 #include "server.h"
 #include "cluster.h"
 #include "atomicvar.h"
+#include "db_cluster.h"
+#include "dbio.h"
 
 #include <signal.h>
 #include <ctype.h>
+#include "assert.h"
 
 /* Database backup. */
 struct dbBackup {
@@ -682,11 +685,66 @@ void unlinkCommand(client *c) {
 
 void setEmptyCommand(client *c) {
 	int numdel = 0, j;
+	if (!nodeIsSlave(server.cluster->myself) || !(c->flags & CLIENT_MASTER)) {
+		addReply(c, shared.err);
+		return;
+	}
 	for (j = 1; j < c->argc; j++)
 		removeEvictKey(c->argv[j], c->db->id, 1);
 	addReply(c, shared.ok);
 }
 
+void dbloadCommand(client *c) {
+	long long client_id , dbid;
+	if (!nodeIsMaster(server.cluster->myself) || !(c->flags & CLIENT_SLAVE))
+		return; 
+	
+	assert(c->argc == 4);
+	if (getLongLongFromObject(c->argv[1], &dbid) != C_OK)
+		return;
+	if (getLongLongFromObject(c->argv[2], &client_id) != C_OK)
+		return; 
+
+	redisDb* db = server.db + dbid; 
+	assert(db); 
+	robj* obj = lookupKeyWrite(db, c->argv[3]);
+	if (obj != shared.emptyvalue)
+		return; 
+	
+	dbRequest *dbreq = createDbRequest(REQUEST_READ);
+	dbreq->dbid = dbid;
+	dbreq->client_id = c->id;
+	dbreq->param_ex = client_id; 
+	dbreq->keyobj = createStringObject(c->argv[3]->ptr, sdslen(c->argv[3]->ptr));
+	dbreq->buffer = sdscatprintf(sdsempty(), "*2\r\n$3\r\nget\r\n$%i\r\n%s\r\n", sdslen(c->argv[3]->ptr), c->argv[3]->ptr);
+	asyncPostDbRequest(dbreq);
+
+	/*addReply(c, shared.ok);*/
+	return; 
+//invalid:
+	/*addReply(c, shared.err);*/
+}
+
+void dbloadreplyCommand(client *c) {
+	long long client_id;
+	if (!nodeIsSlave(server.cluster->myself) || !(c->flags & CLIENT_MASTER)) 
+		goto invalid; 
+	
+	assert(c->argc == 2);
+	if (getLongLongFromObject(c->argv[1], &client_id) != C_OK)
+		goto invalid;
+	
+	client* out_client = lookupClientByID(client_id); 
+	if (!out_client)
+		goto invalid; 
+	if ((out_client->flags & CLIENT_BLOCKED) && out_client->btype == BLOCKED_DB_LOAD) {
+		unblockClient(out_client);
+	}
+	addReply(c, shared.ok); 
+	return; 
+invalid:
+	addReply(c, shared.err);
+}
 
 /* EXISTS key1 key2 ... key_N.
  * Return value is the number of keys existing. */
