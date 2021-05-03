@@ -685,10 +685,10 @@ void unlinkCommand(client *c) {
 
 void setEmptyCommand(client *c) {
 	int numdel = 0, j;
-	if (!nodeIsSlave(server.cluster->myself) || !(c->flags & CLIENT_MASTER)) {
-		addReply(c, shared.err);
-		return;
-	}
+	//if (!nodeIsSlave(server.cluster->myself) || !(c->flags & CLIENT_MASTER)) {
+	//	addReply(c, shared.err);
+	//	return;
+	//}
 	for (j = 1; j < c->argc; j++)
 		removeEvictKey(c->argv[j], c->db->id, 1);
 	addReply(c, shared.ok);

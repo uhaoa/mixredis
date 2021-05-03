@@ -1391,7 +1391,11 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 if (rewriteStreamObject(aof,&key,o) == 0) goto werr;
             } else if (o->type == OBJ_MODULE) {
                 if (rewriteModuleObject(aof,&key,o) == 0) goto werr;
-            } else {
+			} else if (o->type == OBJ_EMPTY) {
+				char emptycmd[] = "*2\r\n$8\r\nSETEMPTY\r\n";
+				if (rioWrite(aof, emptycmd, sizeof(emptycmd) - 1) == 0) goto werr;
+				if (rioWriteBulkObject(aof, &key) == 0) goto werr;
+			} else {
                 serverPanic("Unknown object type");
             }
             /* Save the expire time */

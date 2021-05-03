@@ -141,13 +141,15 @@ int tryReadEmptyKeys(client *c)
 				argv[2] = createStringObjectFromLongLongForValue(c->id);
 				argv[3] = thiskey;
 				
-				server.master->flags |= CLIENT_MASTER_FORCE_REPLY;
-				addReplyArrayLen(server.master, 4);
-				addReplyBulk(server.master, argv[0]);
-				addReplyBulk(server.master, argv[1]);
-				addReplyBulk(server.master, argv[2]);
-				addReplyBulk(server.master, argv[3]);
-				server.master->flags &= ~CLIENT_MASTER_FORCE_REPLY;
+				if (server.master != NULL) {
+					server.master->flags |= CLIENT_MASTER_FORCE_REPLY;
+					addReplyArrayLen(server.master, 4);
+					addReplyBulk(server.master, argv[0]);
+					addReplyBulk(server.master, argv[1]);
+					addReplyBulk(server.master, argv[2]);
+					addReplyBulk(server.master, argv[3]);
+					server.master->flags &= ~CLIENT_MASTER_FORCE_REPLY;
+				}
 
 				decrRefCount(argv[1]); 
 				decrRefCount(argv[2]);

@@ -103,18 +103,6 @@ int rdbLoadType(rio *rdb) {
     return type;
 }
 
-int rdbSaveEmptyFlag(rio *rdb, unsigned char flag)
-{
-	return rdbWriteRaw(rdb, &flag, 1);
-}
-
-int rdbLoadEmptyFlag(rio *rdb)
-{
-	unsigned char flag;
-	if (rioRead(rdb, &flag, 1) == 0) return -1;
-	return flag;
-}
-
 /* This is only used to load old databases stored with the RDB_OPCODE_EXPIRETIME
  * opcode. New versions of Redis store using the RDB_OPCODE_EXPIRETIME_MS
  * opcode. On error -1 is returned, however this could be a valid time, so
@@ -677,6 +665,8 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
         return rdbSaveType(rdb,RDB_TYPE_STREAM_LISTPACKS);
     case OBJ_MODULE:
         return rdbSaveType(rdb,RDB_TYPE_MODULE_2);
+	case OBJ_EMPTY:
+		return rdbSaveType(rdb, RDB_TYPE_EMPTY_VALUE); 
     default:
         serverPanic("Unknown object type");
     }
@@ -1096,8 +1086,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
     /* Save type, key, value */
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
-	if (rdbSaveEmptyFlag(rdb, val == shared.emptyvalue ? 1 : 0) == -1) return -1;
-    if (val != shared.emptyvalue && rdbSaveObject(rdb,val,key) == -1) return -1;
+    if (val->type != OBJ_EMPTY && rdbSaveObject(rdb,val,key) == -1) return -1;
 
     /* Delay return if required (for testing) */
     if (server.rdb_key_save_delay)
@@ -2319,22 +2308,18 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 decrRefCount(aux);
                 continue; /* Read next opcode. */
             }
-        }
+        } 
 
         /* Read key */
         if ((key = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
             goto eoferr;
-		/* Read Empty Flag */
-		int empty_flag = 0;
-		if ((empty_flag = rdbLoadEmptyFlag(rdb)) == -1) goto eoferr;
-		if (empty_flag)
-			val = shared.emptyvalue;
-		else {
-			/* Read value */
-			if ((val = rdbLoadObject(type, rdb, key)) == NULL) {
-				sdsfree(key);
-				goto eoferr;
-			}
+		/* Read value */
+		if (type == RDB_TYPE_EMPTY_VALUE) {
+			val = shared.emptyvalue; 
+		}
+		else if ((val = rdbLoadObject(type, rdb, key)) == NULL) {
+			sdsfree(key);
+			goto eoferr;
 		}
 
         /* Check if the key already expired. This function is used when loading
