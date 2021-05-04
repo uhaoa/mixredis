@@ -919,6 +919,8 @@ void freeDbRequest(dbRequest *req) {
 		if (req->argv[i] != NULL)
 			decrRefCount(req->argv[i]); 
 	}
+
+	server.db_cluster->request_count--; 
 }
 
 static void freeDbRequestList(list *request_list) {

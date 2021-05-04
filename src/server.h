@@ -632,6 +632,10 @@ typedef struct RedisModuleDigest {
 #define OBJ_SHARED_REFCOUNT INT_MAX     /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT (INT_MAX-1) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
+
+ /* 如果object中的lru值为0，表示淘汰中，正在落地.*/
+#define EVICT_MARK_VALUE 0 
+
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;
@@ -1396,6 +1400,8 @@ struct redisServer {
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Precision of random sampling */
+	int maxmemory_evict_ratio;
+	int maxmemory_eviction_tenacity;
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */

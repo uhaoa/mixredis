@@ -149,5 +149,6 @@ dbClusterConnection *createDbClusterConnection(void);
 void freeDbClusterConnection(dbClusterConnection *conn);
 dbClusterEntryPoint *copyEntryPoint(dbClusterEntryPoint *source);
 void freeEntryPoints(dbClusterEntryPoint *entry_points, int count);
+void initDbCluster(); 
 
 #endif /* __REDIS_CLUSTER_PROXY_CLUSTER_H__ */

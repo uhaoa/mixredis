@@ -54,6 +54,9 @@ int keyIsExpired(redisDb *db, robj *key);
  * Firstly, decrement the counter if the decrement time is reached.
  * Then logarithmically increment the counter, and update the access time. */
 void updateLFU(robj *val) {
+	if (val->lru == EVICT_MARK_VALUE) {
+		val->lru = (LFUGetTimeInMinutes() << 8) | LFU_INIT_VAL;
+	}
     unsigned long counter = LFUDecrAndReturn(val);
     counter = LFULogIncr(counter);
     val->lru = (LFUGetTimeInMinutes()<<8) | counter;

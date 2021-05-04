@@ -35,6 +35,8 @@
 #include "atomicvar.h"
 #include "db_cluster.h"
 #include "dbio.h"
+#include "monotonic.h"
+#include "assert.h"
 
 size_t lazyfreeGetFreeEffort(robj *obj); 
 void createDumpPayload(rio *payload, robj *o, robj *key); 
@@ -63,6 +65,7 @@ struct evictionPoolEntry {
 };
 
 static struct evictionPoolEntry *EvictionPoolLRU;
+
 
 /* ----------------------------------------------------------------------------
  * Implementation of eviction, aging and LRU
@@ -176,26 +179,19 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
 
         de = samples[j];
         key = dictGetKey(de);
-
-        /* If the dictionary we are sampling from is not the main
-         * dictionary (but the expires one) we need to lookup the key
-         * again in the key dictionary to obtain the value object. */
-        if (server.maxmemory_policy != MAXMEMORY_VOLATILE_TTL) {
-            if (sampledict != keydict) de = dictFind(keydict, key);
-            o = dictGetVal(de);
-        }
-
+		o = dictGetVal(de);
         /* Calculate the idle time according to the policy. This is called
          * idle just because the code initially handled LRU, but is in fact
-         * just a score where an higher score means better candidate. */
+         * just a score where an higher score means better candidate.
+		 * LRU的LFU忽略淘汰带有过期时间的KEY
+		 */
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
-			// LRU策略时忽略淘汰带有过期时间的KEY
-			dictEntry *tmpde = dictFind(server.db[dbid].expires , key);
-			if(tmpde)
+			if (dictFind(server.db[dbid].expires, key)) {
 				continue;
-            idle = estimateObjectIdleTime(o);
-			if(idle <= LRU_EVICT_RESOLUTION || o->lru == 0 || o == shared.emptyvalue)
+			}
+			if(o->lru == EVICT_MARK_VALUE || o == shared.emptyvalue)
 				continue;
+			idle = estimateObjectIdleTime(o);
         } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             /* When we use an LRU policy, we sort the keys by idle time
              * so that we expire keys starting from greater idle time.
@@ -204,10 +200,12 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
              * first. So inside the pool we put objects using the inverted
              * frequency subtracting the actual frequency to the maximum
              * frequency of 255. */
+			if (dictFind(server.db[dbid].expires, key)) {
+				continue;
+			}
+			if(o->lru == EVICT_MARK_VALUE || o == shared.emptyvalue)
+				continue;
             idle = 255-LFUDecrAndReturn(o);
-        } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
-            /* In this case the sooner the expire the better. */
-            idle = ULLONG_MAX - (long)dictGetVal(de);
         } else {
             serverPanic("Unknown eviction policy in evictionPoolPopulate()");
         }
@@ -437,12 +435,40 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 
     /* Compute how much memory we need to free. */
     mem_tofree = mem_used - server.maxmemory;
+	float evict_ratio = 0.0f; 
+	if (server.maxmemory_evict_ratio == 0) {
+		/* default */ 
+		evict_ratio = 0.05f; 
+	}
+	else {
+		evict_ratio = server.maxmemory_evict_ratio / 100.0f;
+	}
+	mem_tofree += (size_t)(server.maxmemory * evict_ratio);
 
     if (logical) *logical = mem_used;
     if (tofree) *tofree = mem_tofree;
 
     return C_ERR;
 }
+
+/* Algorithm for converting tenacity (0-100) to a time limit.  */
+static unsigned long evictionTimeLimitUs() {
+	serverAssert(server.maxmemory_eviction_tenacity >= 0);
+	serverAssert(server.maxmemory_eviction_tenacity <= 100);
+
+	if (server.maxmemory_eviction_tenacity <= 10) {
+		/* A linear progression from 0..500us */
+		return 50uL * server.maxmemory_eviction_tenacity;
+	}
+
+	if (server.maxmemory_eviction_tenacity < 100) {
+		/* A 15% geometric progression, resulting in a limit of ~2 min at tenacity==99  */
+		return (unsigned long)(500.0 * pow(1.15, server.maxmemory_eviction_tenacity - 10.0));
+	}
+
+	return ULONG_MAX;   /* No limit to eviction time */
+}
+
 
 /* This function is periodically called to see if there is memory to free
  * according to the current "maxmemory" settings. In case we are over the
@@ -462,17 +488,25 @@ int freeMemoryIfNeeded(void) {
 	mstime_t latency/*, eviction_latency*/, lazyfree_latency;
 	/*long long delta;*/
 	int result = C_ERR;
+
+	if (server.db_cluster->request_count > 0)
+		return C_OK;
+
 	/* When clients are paused the dataset should be static not just from the
 	* POV of clients not being able to write, but also from the POV of
 	* expires and evictions of keys not being performed. */
 	if (clientsArePaused()) return C_OK;
 	if (getMaxmemoryState(&mem_reported, NULL, &mem_tofree, NULL) == C_OK)
 		return C_OK;
-	//if (server.db_cluster->request_count > 0)
-	//	return C_OK; 
+
 	latencyStartMonitor(latency);
 	struct evictionPoolEntry *pool = EvictionPoolLRU;
 	mem_freed = 0;
+
+	unsigned long eviction_time_limit_us = evictionTimeLimitUs();
+	monotime evictionTimer;
+	elapsedStart(&evictionTimer);
+
 	while (mem_freed < mem_tofree) {
 		int k, i;
 		sds bestkey = NULL;
@@ -508,6 +542,11 @@ int freeMemoryIfNeeded(void) {
 						pool[k].key);
 				}
 
+				robj* val = dictGetVal(de);
+				assert(val);
+				if(val->lru == EVICT_MARK_VALUE || val == shared.emptyvalue)
+					continue;
+
 				/* Remove the entry from the pool. */
 				if (pool[k].key != pool[k].cached)
 					sdsfree(pool[k].key);
@@ -531,7 +570,7 @@ int freeMemoryIfNeeded(void) {
 		}
 
 		/* dump key */
-		if (bestkey/* && server.maxmemory_policy & (MAXMEMORY_FLAG_LRU*/) {
+		if (bestkey) {
 			robj *val;
 			rio payload;
 			db = server.db + bestdbid;
@@ -540,7 +579,7 @@ int freeMemoryIfNeeded(void) {
 				decrRefCount(keyobj);
 				continue;
 			}
-			val->lru = 0;
+			val->lru = EVICT_MARK_VALUE;
 			createDumpPayload(&payload, val, keyobj);
 			dbRequest *dbreq = createDbRequest(REQUEST_WRITE);
 			if (dbreq == NULL) {
@@ -554,33 +593,23 @@ int freeMemoryIfNeeded(void) {
 			dbreq->buffer = sdsnewlen(cmd, len);
 			free(cmd);
 			sdsfree(payload.io.buffer.ptr);
-			asyncPostDbRequest(dbreq); 
+			asyncPostDbRequest(dbreq);
 
-			mem_freed += lazyfreeGetFreeEffort(val);
-			keys_freed++; 
+			mem_freed += objectComputeSize(val, LLONG_MAX);
+			keys_freed++;
 		}
-		if (keys_freed % 16 == 0)
+		else 
 			break; 
+		if (keys_freed % 16 == 0) {
+			if (elapsedUs(evictionTimer) > eviction_time_limit_us) {
+				break;
+			}
+		}
 
 	}
 	result = C_OK;
 
 cant_free:
-	/* We are here if we are not able to reclaim memory. There is only one
-	* last thing we can try: check if the lazyfree thread has jobs in queue
-	* and wait... */
-	if (result != C_OK) {
-		latencyStartMonitor(lazyfree_latency);
-		while (bioPendingJobsOfType(BIO_LAZY_FREE)) {
-			if (getMaxmemoryState(NULL, NULL, NULL, NULL) == C_OK) {
-				result = C_OK;
-				break;
-			}
-			usleep(1000);
-		}
-		latencyEndMonitor(lazyfree_latency);
-		latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
-	}
 	latencyEndMonitor(latency);
 	latencyAddSampleIfNeeded("eviction-cycle", latency);
 	return result;

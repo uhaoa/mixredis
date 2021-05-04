@@ -2926,6 +2926,8 @@ void initServer(void) {
 
     createSharedObjects();
     adjustOpenFilesLimit();
+	const char *clk_msg = monotonicInit();
+	serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
@@ -3095,6 +3097,12 @@ void initServer(void) {
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
+
+	// 只支持这两种淘汰策略.
+	if (server.maxmemory_policy != MAXMEMORY_ALLKEYS_LRU && server.maxmemory_policy != MAXMEMORY_ALLKEYS_LFU) {
+		serverLog(LL_WARNING, "maxmemory_policy config error.");
+		exit(1);
+	}
 
     if (server.cluster_enabled) clusterInit();
     replicationScriptCacheInit();
