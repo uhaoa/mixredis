@@ -125,7 +125,6 @@ int tryReadEmptyKeys(client *c)
 		robj *thiskey = c->argv[result.keys[i]];
 		robj *obj = lookupKeyRead(c->db, thiskey); 
 		if (obj == shared.emptyvalue) {
-			emptynums++; 
 			if ((server.cluster_enabled && nodeIsMaster(server.cluster->myself)) ||
 					(!server.cluster_enabled && !server.masterhost)) 
 			{
@@ -135,8 +134,10 @@ int tryReadEmptyKeys(client *c)
 				dbreq->keyobj = createStringObject(thiskey->ptr, sdslen(thiskey->ptr));
 				dbreq->buffer = sdscatprintf(sdsempty(), "*2\r\n$3\r\nget\r\n$%i\r\n%s\r\n", sdslen(thiskey->ptr), thiskey->ptr);
 				asyncPostDbRequest(dbreq);
+
+				emptynums++;
 			}
-			else {
+			else if(server.master != NULL){
 				// 通知master
 				robj *argv[4];
 				argv[0] = shared.dbload;
@@ -144,18 +145,18 @@ int tryReadEmptyKeys(client *c)
 				argv[2] = createStringObjectFromLongLongForValue(c->id);
 				argv[3] = thiskey;
 				
-				if (server.master != NULL) {
-					server.master->flags |= CLIENT_MASTER_FORCE_REPLY;
-					addReplyArrayLen(server.master, 4);
-					addReplyBulk(server.master, argv[0]);
-					addReplyBulk(server.master, argv[1]);
-					addReplyBulk(server.master, argv[2]);
-					addReplyBulk(server.master, argv[3]);
-					server.master->flags &= ~CLIENT_MASTER_FORCE_REPLY;
-				}
+				server.master->flags |= CLIENT_MASTER_FORCE_REPLY;
+				addReplyArrayLen(server.master, 4);
+				addReplyBulk(server.master, argv[0]);
+				addReplyBulk(server.master, argv[1]);
+				addReplyBulk(server.master, argv[2]);
+				addReplyBulk(server.master, argv[3]);
+				server.master->flags &= ~CLIENT_MASTER_FORCE_REPLY;
 
 				decrRefCount(argv[1]); 
 				decrRefCount(argv[2]);
+
+				emptynums++;
 			}
 		}
 	}
