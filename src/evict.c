@@ -483,7 +483,7 @@ int freeMemoryIfNeeded(void) {
 	int keys_freed = 0;
 	/* By default replicas should ignore maxmemory
 	* and just be masters exact copies. */
-	if (server.masterhost && server.repl_slave_ignore_maxmemory) return C_OK;
+	if (server.masterhost /*&& server.repl_slave_ignore_maxmemory*/) return C_OK;
 	size_t mem_reported, mem_tofree, mem_freed;
 	mstime_t latency/*, eviction_latency*/, lazyfree_latency;
 	/*long long delta;*/

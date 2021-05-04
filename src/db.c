@@ -699,8 +699,12 @@ void setEmptyCommand(client *c) {
 
 void dbloadCommand(client *c) {
 	long long client_id , dbid;
-	if (!nodeIsMaster(server.cluster->myself) || !(c->flags & CLIENT_SLAVE))
-		return; 
+	if ((server.cluster_enabled && !nodeIsMaster(server.cluster->myself))
+		|| (!server.cluster_enabled && server.masterhost)
+		|| !(c->flags & CLIENT_SLAVE))
+	{
+		return;
+	}
 	
 	assert(c->argc == 4);
 	if (getLongLongFromObject(c->argv[1], &dbid) != C_OK)
@@ -730,8 +734,12 @@ void dbloadCommand(client *c) {
 
 void dbloadreplyCommand(client *c) {
 	long long client_id;
-	if (!nodeIsSlave(server.cluster->myself) || !(c->flags & CLIENT_MASTER)) 
-		goto invalid; 
+	if ((server.cluster_enabled && !nodeIsSlave(server.cluster->myself))
+		|| (!server.cluster_enabled && !server.masterhost)
+		|| !(c->flags & CLIENT_MASTER))
+	{
+		goto invalid;
+	}
 	
 	assert(c->argc == 2);
 	if (getLongLongFromObject(c->argv[1], &client_id) != C_OK)

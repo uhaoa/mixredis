@@ -112,9 +112,10 @@ int tryReadEmptyKeys(client *c)
 {
 	int emptynums = 0;
 	struct redisCommand *cmd = lookupCommand(c->argv[0]->ptr);	
-	if (cmd == NULL || cmd->proc == dbloadCommand || cmd->proc == dbloadreplyCommand)
-		return 0; 
-	if (cmd->proc == restoreCommand && !nodeIsMaster(server.cluster->myself)) 
+	if (cmd == NULL 
+		|| cmd->proc == dbloadCommand 
+		|| cmd->proc == dbloadreplyCommand
+		|| cmd->proc == restoreCommand)
 		return 0; 
 
 	getKeysResult result = GETKEYS_RESULT_INIT;
@@ -125,7 +126,9 @@ int tryReadEmptyKeys(client *c)
 		robj *obj = lookupKeyRead(c->db, thiskey); 
 		if (obj == shared.emptyvalue) {
 			emptynums++; 
-			if (nodeIsMaster(server.cluster->myself)) {
+			if ((server.cluster_enabled && nodeIsMaster(server.cluster->myself)) ||
+					(!server.cluster_enabled && !server.masterhost)) 
+			{
 				dbRequest *dbreq = createDbRequest(REQUEST_READ);
 				dbreq->dbid = c->db->id;
 				dbreq->client_id = c->id;
