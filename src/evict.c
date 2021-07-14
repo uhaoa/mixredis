@@ -544,8 +544,14 @@ int freeMemoryIfNeeded(void) {
 
 				robj* val = dictGetVal(de);
 				assert(val);
-				if(val->lru == EVICT_MARK_VALUE || val == shared.emptyvalue)
-					continue;
+				if(val->lru == EVICT_MARK_VALUE || val == shared.emptyvalue) {
+                    /* Remove the entry from the pool. */
+                    if (pool[k].key != pool[k].cached)
+                        sdsfree(pool[k].key);
+                    pool[k].key = NULL;
+                    pool[k].idle = 0;
+					continue; 
+				}
 
 				/* Remove the entry from the pool. */
 				if (pool[k].key != pool[k].cached)

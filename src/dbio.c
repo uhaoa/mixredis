@@ -63,7 +63,7 @@ int dbioServerCron(struct aeEventLoop *eventLoop, long long id, void *clientData
 	UNUSED(clientData);
 	UNUSED(mask);
 
-	atomicSet(already_wakeup, 0);
+	/*atomicSet(already_wakeup, 0);*/
 
 	static char buf[1024] = {0};
 	while (1) {
@@ -72,20 +72,28 @@ int dbioServerCron(struct aeEventLoop *eventLoop, long long id, void *clientData
 			break;
 	}
 
-	pthread_mutex_lock(&dbio_mutex);
-	while (1)
-	{
+	while (1) {
+		pthread_mutex_lock(&dbio_mutex);
 		if (listLength(dbio_req_list) == 0) {
+			pthread_mutex_unlock(&dbio_mutex);
 			break;
 		}
-		listNode *ln = listFirst(dbio_req_list);
-		assert(ln);
-		dbRequest *dbreq = listNodeValue(ln);
-		postDbRequest(dbreq);
-		listDelNode(dbio_req_list, ln);
-	}
-	pthread_mutex_unlock(&dbio_mutex);
+		while (1)
+		{
+			listNode* ln = listFirst(dbio_req_list);
+			assert(ln);
+			dbRequest* dbreq = listNodeValue(ln);
+			postDbRequest(dbreq);
+			listDelNode(dbio_req_list, ln);
 
+			if (listLength(dbio_req_list) == 0) {
+				break;
+			}
+		}
+		pthread_mutex_unlock(&dbio_mutex);
+
+		atomicSet(already_wakeup, 0);
+	}
 	return 0; 
 }
 
