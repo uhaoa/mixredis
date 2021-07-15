@@ -222,7 +222,10 @@ void processDbResponse()
 				serverDbLog(LL_WARNING, "read response error."); 
 			}
 			client* c = lookupClientByID(req->client_id);
-			if(!c) continue;
+			if (!c) {
+				freeDbRequest(req);
+				continue;
+			}
 			if (c->flags & CLIENT_SLAVE) {
 				// 通知slave 
 				robj *argv[2];
