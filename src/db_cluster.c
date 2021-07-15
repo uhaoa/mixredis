@@ -919,7 +919,7 @@ void freeDbRequest(dbRequest *req) {
 		if (req->argv[i] != NULL)
 			decrRefCount(req->argv[i]); 
 	}
-
+	zfree(req);
 	server.db_cluster->request_count--; 
 }
 
