@@ -1920,9 +1920,14 @@ int processCommandAndResetClient(client *c) {
 int processPendingCommandsAndResetClient(client *c) {
     if (c->flags & CLIENT_PENDING_COMMAND) {
         c->flags &= ~CLIENT_PENDING_COMMAND;
-        if (processCommandAndResetClient(c) == C_ERR) {
+        int ret = processCommandAndResetClient(c);
+        if (ret == C_ERR) {
             return C_ERR;
         }
+        else {
+            return ret; 
+        }
+        
     }
     return C_OK;
 }
@@ -3377,12 +3382,17 @@ int handleClientsWithPendingReadsUsingThreads(void) {
          * later when clients are unpaused and we re-queue all clients. */
         if (clientsArePaused()) continue;
 
-        if (processPendingCommandsAndResetClient(c) == C_ERR) {
-            /* If the client is no longer valid, we avoid
-             * processing the client later. So we just go
-             * to the next. */
+        int ret = processPendingCommandsAndResetClient(c);
+        if (ret == C_ERR) {
+            /* if the client is no longer valid, we avoid
+                * processing the client later. so we just go
+                * to the next. */
             continue;
         }
+        else if (ret == C_LOAD) {
+            continue;
+        }
+
         processInputBuffer(c);
 
         /* We may have pending replies if a thread readQueryFromClient() produced
