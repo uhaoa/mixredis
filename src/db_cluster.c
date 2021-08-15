@@ -29,6 +29,7 @@
 #include "assert.h" /* Use proxy's assert */
 #include <signal.h>
 #include "cluster.h"
+#include "atomicvar.h"
 
 #define CLUSTER_NODE_KEEPALIVE_INTERVAL 15	
 #define QUEUE_TYPE_SENDING                  1
@@ -920,7 +921,7 @@ void freeDbRequest(dbRequest *req) {
 			decrRefCount(req->argv[i]); 
 	}
 	zfree(req);
-	server.db_cluster->request_count--; 
+	atomicDecr(server.db_cluster->request_count , 1);
 }
 
 static void freeDbRequestList(list *request_list) {
@@ -1440,7 +1441,7 @@ dbRequest *createDbRequest(int request_type)
 	req->param_ex = 0; 
 	req->requests_pending_lnode = NULL;
 	req->requests_to_send_lnode = NULL;
-	server.db_cluster->request_count++; 
+	atomicIncr(server.db_cluster->request_count, 1);
 	return req; 
 }
 

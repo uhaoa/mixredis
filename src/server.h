@@ -1525,6 +1525,7 @@ struct redisServer {
 	struct dbCluster *db_cluster;
 	uint64_t next_request_id;
 	aeEventLoop *db_el;
+    int db_event_fd; 
 };
 
 typedef struct pubsubPattern {

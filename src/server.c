@@ -57,6 +57,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -2130,8 +2131,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                           0,
                           &ei);
 
-	/* 处理db的回复 */
-	processDbResponse();
+	run_with_period(500) {
+        processDbResponse();
+	}
 
     server.cronloops++;
     return 1000/server.hz;
@@ -3071,6 +3073,12 @@ void initServer(void) {
                 "Error registering the readable event for the module "
                 "blocked clients subsystem.");
     }
+
+    server.db_event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	if (aeCreateFileEvent(server.el, server.db_event_fd, AE_READABLE, processDbResponse, NULL) == AE_ERR) {
+        serverPanic("Fatal: aeCreateFileEvent event_fd.");
+		exit(1);
+	}
 
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */

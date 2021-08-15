@@ -11,6 +11,7 @@ static list *dbio_resp_list;
 static pthread_mutex_t dbio_mutex; 
 static int event_fd = 0;
 static size_t already_wakeup = 0;
+static size_t already_main_wakeup = 0;
 
 int dbioServerCron(struct aeEventLoop *eventLoop, long long id, void *clientData, int mask);
 void *dbioMain(void *arg); 
@@ -44,6 +45,18 @@ void dbioWakeup()
 	int64_t data = 1;
 	ssize_t ret = write(event_fd, &data, sizeof(data));
 	UNUSED(ret); 
+}
+
+void mainThreadWakeup()
+{
+	size_t wakeup;
+	atomicGet(already_main_wakeup, wakeup);
+	if (wakeup == 1)
+		return;
+	atomicSet(already_main_wakeup, 1);
+	int64_t data = 1;
+	ssize_t ret = write(server.db_event_fd, &data, sizeof(data));
+	UNUSED(ret);
 }
 
 void *dbioMain(void *arg) {
@@ -114,6 +127,8 @@ void asyncPostDbResponse(dbRequest * res)
 	pthread_mutex_lock(&dbio_mutex);
 	listAddNodeTail(dbio_resp_list, res);
 	pthread_mutex_unlock(&dbio_mutex);
+
+	mainThreadWakeup(); 
 }
 
 int tryReadEmptyKeys(client *c)
@@ -178,8 +193,22 @@ int tryReadEmptyKeys(client *c)
 	return 0; 
 }
 
-void processDbResponse()
+void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* clientData, int mask)
 {
+	UNUSED(eventLoop);
+	UNUSED(id);
+	UNUSED(clientData);
+	UNUSED(mask);
+
+	static char buf[1024] = { 0 };
+	while (1) {
+		int ret = read(server.db_event_fd, buf, sizeof(buf));
+		if (ret == -1 || (size_t)ret < sizeof(buf))
+			break;
+	}
+
+	atomicSet(already_main_wakeup, 0);
+
 	while (1)
 	{
 		pthread_mutex_lock(&dbio_mutex);
@@ -187,67 +216,77 @@ void processDbResponse()
 			pthread_mutex_unlock(&dbio_mutex);
 			break;
 		}
-		dbRequest *req = NULL;
-		listNode *ln = listFirst(dbio_resp_list);
-		assert(ln);
-		req = listNodeValue(ln);
-		listDelNode(dbio_resp_list, ln);
-		pthread_mutex_unlock(&dbio_mutex);
+		while (1)
+		{
+			dbRequest* req = NULL;
+			listNode* ln = listFirst(dbio_resp_list);
+			assert(ln);
+			req = listNodeValue(ln);
+			listDelNode(dbio_resp_list, ln);
+			
 
-		if (req->request_type == REQUEST_WRITE) {
-			removeEvictKey(req->keyobj, req->dbid, 0);
-		}
-		else if(req->request_type == REQUEST_READ) {
-			redisDb *db = server.db + req->dbid;
-			assert(db);
-			robj* obj = lookupKeyWrite(db,req->keyobj);
-			if (obj && obj == shared.emptyvalue && req->value_obj) {
-				/* remove the old key.*/
-				dbDelete(db, req->keyobj); 
-				/* create new.*/
-				dbAdd(db, req->keyobj, req->value_obj); 				
-				
-				struct redisCommand* cmd = lookupCommand(req->argv[0]->ptr); 
-				assert(cmd);
-				
-				/* feed to aof. */
-				if (server.aof_state != AOF_OFF)
-					feedAppendOnlyFile(cmd, req->dbid, req->argv, 5);
-				/* feed to slave.*/
-				replicationFeedSlaves(server.slaves, req->dbid, req->argv, 5); 
+			if (req->request_type == REQUEST_WRITE) {
+				removeEvictKey(req->keyobj, req->dbid, 0);
+			}
+			else if (req->request_type == REQUEST_READ) {
+				redisDb* db = server.db + req->dbid;
+				assert(db);
+				robj* obj = lookupKeyWrite(db, req->keyobj);
+				if (obj && obj == shared.emptyvalue && req->value_obj) {
+					/* remove the old key.*/
+					dbDelete(db, req->keyobj);
+					/* create new.*/
+					dbAdd(db, req->keyobj, req->value_obj);
 
-				req->value_obj = NULL;
+					struct redisCommand* cmd = lookupCommand(req->argv[0]->ptr);
+					assert(cmd);
+
+					/* feed to aof. */
+					if (server.aof_state != AOF_OFF)
+						feedAppendOnlyFile(cmd, req->dbid, req->argv, 5);
+					/* feed to slave.*/
+					replicationFeedSlaves(server.slaves, req->dbid, req->argv, 5);
+
+					req->value_obj = NULL;
+
+					/*serverLog(LL_WARNING, "REQUEST_READ ,key:%s , dbid:", (char*)req->keyobj->ptr , req->dbid);*/
+				}
+				else {
+					serverDbLog(LL_WARNING, "read response error.");
+				}
+				client* c = lookupClientByID(req->client_id);
+				if (!c) {
+					freeDbRequest(req);
+					break;
+				}
+				if (c->flags & CLIENT_SLAVE) {
+					// 通知slave 
+					robj* argv[2];
+					argv[0] = shared.dbloadreply;
+					argv[1] = createStringObjectFromLongLongForValue(req->param_ex);
+
+					addReplyArrayLen(c, 2);
+					addReplyBulk(c, argv[0]);
+					addReplyBulk(c, argv[1]);
+
+					decrRefCount(argv[1]);
+
+					flushSlavesOutputBuffers();
+				}
+				else if ((c->flags & CLIENT_BLOCKED) && c->btype == BLOCKED_DB_LOAD) {
+					unblockClient(c);
+				}
 			}
 			else {
-				serverDbLog(LL_WARNING, "read response error."); 
+				assert(0);
 			}
-			client* c = lookupClientByID(req->client_id);
-			if (!c) {
-				freeDbRequest(req);
-				continue;
-			}
-			if (c->flags & CLIENT_SLAVE) {
-				// 通知slave 
-				robj *argv[2];
-				argv[0] = shared.dbloadreply;
-				argv[1] = createStringObjectFromLongLongForValue(req->param_ex);
-
-				addReplyArrayLen(c, 2);
-				addReplyBulk(c, argv[0]);
-				addReplyBulk(c, argv[1]);
-
-				decrRefCount(argv[1]);
-
-				flushSlavesOutputBuffers();
-			}
-			else if ((c->flags & CLIENT_BLOCKED) && c->btype == BLOCKED_DB_LOAD) {
-				unblockClient(c);
+			freeDbRequest(req);
+			if (listLength(dbio_resp_list) == 0) {
+				break;
 			}
 		}
-		else {
-			assert(0); 
-		}
-		freeDbRequest(req); 
+		pthread_mutex_unlock(&dbio_mutex);
+		atomicSet(already_main_wakeup, 0);
 	}
 }
 

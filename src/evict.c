@@ -192,6 +192,8 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
 			if(o->lru == EVICT_MARK_VALUE || o == shared.emptyvalue)
 				continue;
 			idle = estimateObjectIdleTime(o);
+			if(idle <= 5)
+				continue;
         } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             /* When we use an LRU policy, we sort the keys by idle time
              * so that we expire keys starting from greater idle time.
@@ -603,6 +605,8 @@ int freeMemoryIfNeeded(void) {
 
 			mem_freed += objectComputeSize(val, LLONG_MAX);
 			keys_freed++;
+
+		/*	serverLog(LL_WARNING, "bestkey bestkey ,key:%s , dbid:", (char*)bestkey , bestdbid);*/
 		}
 		else 
 			break; 
