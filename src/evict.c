@@ -491,7 +491,7 @@ int freeMemoryIfNeeded(void) {
 	/*long long delta;*/
 	int result = C_ERR;
 
-	if (server.db_cluster->request_count > 0)
+	if (server.db_cluster->request_count > 1024)
 		return C_OK;
 
 	/* When clients are paused the dataset should be static not just from the
@@ -606,7 +606,7 @@ int freeMemoryIfNeeded(void) {
 			mem_freed += objectComputeSize(val, LLONG_MAX);
 			keys_freed++;
 
-		/*	serverLog(LL_WARNING, "bestkey bestkey ,key:%s , dbid:", (char*)bestkey , bestdbid);*/
+			/*serverLog(LL_WARNING, "bestkey bestkey ,key:%s , dbid:", (char*)bestkey , bestdbid);*/
 		}
 		else 
 			break; 
@@ -665,6 +665,8 @@ void removeEvictKey(robj *keyobj ,int dbid, int force)
 	* deliver data to the slaves fast enough, so we force the
 	* transmission here inside the loop. */
 	flushSlavesOutputBuffers();
+
+	/*serverLog(LL_WARNING, "removeEvictKey ,key:%s", (char*)keyobj->ptr);*/
 }
 
 /* This is a wrapper for freeMemoryIfNeeded() that only really calls the

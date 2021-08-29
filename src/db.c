@@ -72,8 +72,12 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
 
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
-         * a copy on write madness. */
-        if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
+         * a copy on write madness. 
+         * lru的值为EVICT_MARK_VALUE, 表示此key正在被淘汰. 
+         * 如果这里不重新设置lru的值, 那么从lru标记为EVICT_MARK_VALUE后所有的set的新值可能会丢失.
+         * 因为db落地完之后会根据lru的值是否为EVICT_MARK_VALUE来决定要不要设置为emptyvalue.
+         */
+        if ((!hasActiveChildProcess() || val->lru == EVICT_MARK_VALUE)&& !(flags & LOOKUP_NOTOUCH)){
             if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
             } else {

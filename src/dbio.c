@@ -184,11 +184,11 @@ int tryReadEmptyKeys(client *c)
 		}
 	}
 	if (emptynums > 0) {
-		if (true/*nodeIsMaster(server.cluster->myself)*/) {
+		//if (true/*nodeIsMaster(server.cluster->myself)*/) {
 			c->db_load_req_num = emptynums;
 			blockClient(c, BLOCKED_DB_LOAD);
 			return 1; 
-		}
+		//}
 	}
 	return 0; 
 }
@@ -252,7 +252,7 @@ void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* client
 					/*serverLog(LL_WARNING, "REQUEST_READ ,key:%s , dbid:", (char*)req->keyobj->ptr , req->dbid);*/
 				}
 				else {
-					serverDbLog(LL_WARNING, "read response error.");
+					serverDbLog(LL_WARNING, "read response error.,key:%s , " , (char*)req->keyobj->ptr);
 				}
 				client* c = lookupClientByID(req->client_id);
 				if (!c) {

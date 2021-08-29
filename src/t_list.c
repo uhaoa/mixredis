@@ -358,6 +358,9 @@ void lsetCommand(client *c) {
             signalModifiedKey(c,c->db,c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_LIST,"lset",c->argv[1],c->db->id);
             server.dirty++;
+            
+            /*serverLog(LL_WARNING, "lsetCommand ,key:%s , index:%d", (char*)c->argv[1]->ptr, index);*/
+            /*serverLogHexDump(LL_WARNING, "lsetCommand Value :" , value->ptr, sdslen(value->ptr));*/
         }
     } else {
         serverPanic("Unknown list encoding");
