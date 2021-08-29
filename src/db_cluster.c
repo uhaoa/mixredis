@@ -1425,9 +1425,7 @@ dbRequest *createDbRequest(int request_type)
 	req->id = server.next_request_id++;
 	req->keyobj = NULL;
 	req->dbid = 0; 
-	req->buffer = sdsempty();
-	if (req->buffer == NULL)
-		return NULL; 
+	req->buffer = NULL;
 	for (int i= 0 ; i < 5 ; i++) {
 		req->argv[i] = NULL; 
 	}
