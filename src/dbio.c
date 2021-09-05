@@ -329,6 +329,7 @@ void initDbRequestObject(dbRequest* req)
 	req->dbid = 0;
 	sdsclear(req->buffer); 
 	sdsclear(req->keyobj->ptr);
+	req->object_size = 0; 
 
 	if (req->value_obj) {
 		decrRefCount(req->value_obj);
@@ -346,7 +347,6 @@ void initDbRequestObject(dbRequest* req)
 	req->requests_pending_lnode = NULL;
 	req->requests_to_send_lnode = NULL;
 	req->param_ex = 0;
-	atomicIncr(server.db_cluster->request_count, 1);
 }
 
 dbRequest* fetchDbRequestObject(int request_type)
@@ -372,7 +372,9 @@ void recycleDbRequestObject(dbRequest* req)
 		decrRefCount(req->value_obj);
 		req->value_obj = NULL; 
 	}
+	if (req->request_type == REQUEST_WRITE) {
+		atomicDecr(server.db_cluster->db_free_memory, req->object_size);
+	}
 	listAddNodeTail(db_request_pool, req);
-	atomicDecr(server.db_cluster->request_count, 1);
 }
 

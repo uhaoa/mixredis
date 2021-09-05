@@ -177,7 +177,7 @@ dbCluster *createDbCluster() {
 	cluster->is_updating = 0;
 	cluster->update_required = 0;
 	cluster->broken = 0;
-	cluster->request_count = 0;
+	cluster->db_free_memory = 0;
 	return cluster;
 }
 
@@ -920,8 +920,10 @@ void freeDbRequest(dbRequest *req) {
 		if (req->argv[i] != NULL)
 			decrRefCount(req->argv[i]); 
 	}
+	if (req->request_type == REQUEST_WRITE) {
+		atomicDecr(server.db_cluster->db_free_memory, req->object_size);
+	}
 	zfree(req);
-	atomicDecr(server.db_cluster->request_count , 1);
 }
 
 static void freeDbRequestList(list *request_list) {
@@ -1423,6 +1425,7 @@ dbRequest *createDbRequest(int request_type)
 	for (int i= 0 ; i < 5 ; i++) {
 		req->argv[i] = createRawStringObject("init", 4);
 	}
+	req->object_size = 0; 
 	req->node = NULL; 
 	req->written = 0;
 	req->has_write_handler = 0;

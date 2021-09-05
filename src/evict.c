@@ -410,6 +410,16 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
     mem_reported = zmalloc_used_memory();
     if (total) *total = mem_reported;
 
+	size_t db_free_memory;
+	atomicGet(server.db_cluster->db_free_memory, db_free_memory);
+	if (db_free_memory <= mem_reported)
+		mem_reported -= db_free_memory;
+	else {
+		// 正常情况下不应该出现这种情况.
+		atomicSet(server.db_cluster->db_free_memory, 0);
+		mem_reported = 0;
+	}
+
     /* We may return ASAP if there is no need to compute the level. */
     int return_ok_asap = !server.maxmemory || mem_reported <= server.maxmemory;
     if (return_ok_asap && !level) return C_OK;
@@ -489,9 +499,6 @@ int freeMemoryIfNeeded(void) {
 	mstime_t latency/*, eviction_latency*/, lazyfree_latency;
 	/*long long delta;*/
 	int result = C_ERR;
-
-	if (server.db_cluster->request_count > 1024)
-		return C_OK;
 
 	/* When clients are paused the dataset should be static not just from the
 	* POV of clients not being able to write, but also from the POV of
@@ -609,11 +616,13 @@ int freeMemoryIfNeeded(void) {
 			free(cmd);
 			/*sdsfree(payload.io.buffer.ptr);*/
 
-			asyncPostDbRequest(dbreq);
-
-			mem_freed += objectComputeSize(val, LLONG_MAX);
+			size_t object_size = objectComputeSize(val, LLONG_MAX);
+			mem_freed += object_size; 
+			atomicIncr(server.db_cluster->db_free_memory , object_size);
+			dbreq->object_size = object_size; 
 			keys_freed++;
 
+			asyncPostDbRequest(dbreq);
 			/*serverLog(LL_WARNING, "bestkey bestkey ,key:%s , dbid:", (char*)bestkey , bestdbid);*/
 		}
 		else 

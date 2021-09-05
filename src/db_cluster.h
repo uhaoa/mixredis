@@ -93,6 +93,7 @@ typedef struct dbRequest {
 	sds buffer;						/* REQUEST_WRITE & REQUEST_READ */
 
 	uint64_t dbid;					/* REQUEST_WRITE */
+	size_t object_size;				/* REQUEST_WRITE */
 
 	robj *argv[5];					/* REQUEST_READ */
 	robj* value_obj;				/* REQUEST_READ */
@@ -128,7 +129,7 @@ typedef struct dbCluster {
 	int broken;
 	struct dbCluster *duplicated_from;
 	list *duplicates;
-	int request_count; 
+	size_t db_free_memory; 
 } dbCluster;
 
 dbCluster *createDbCluster();
