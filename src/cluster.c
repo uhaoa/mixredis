@@ -4940,6 +4940,36 @@ void createDumpPayload(rio *payload, robj *o, robj *key) {
     payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr,&crc,8);
 }
 
+/* 传入指定的io_buf, 减少分配频率. */
+void createDumpPayloadEx(rio* payload, robj* o, robj* key, sds io_buf) {
+    unsigned char buf[2];
+    uint64_t crc;
+
+    /* Serialize the object in an RDB-like format. It consist of an object type
+     * byte followed by the serialized object. This is understood by RESTORE. */
+    rioInitWithBuffer(payload, io_buf);
+    serverAssert(rdbSaveObjectType(payload, o));
+    serverAssert(rdbSaveObject(payload, o, key));
+
+    /* Write the footer, this is how it looks like:
+     * ----------------+---------------------+---------------+
+     * ... RDB payload | 2 bytes RDB version | 8 bytes CRC64 |
+     * ----------------+---------------------+---------------+
+     * RDB version and CRC are both in little endian.
+     */
+
+     /* RDB version */
+    buf[0] = RDB_VERSION & 0xff;
+    buf[1] = (RDB_VERSION >> 8) & 0xff;
+    payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr, buf, 2);
+
+    /* CRC64 */
+    crc = crc64(0, (unsigned char*)payload->io.buffer.ptr,
+        sdslen(payload->io.buffer.ptr));
+    memrev64ifbe(&crc);
+    payload->io.buffer.ptr = sdscatlen(payload->io.buffer.ptr, &crc, 8);
+}
+
 /* Verify that the RDB version of the dump payload matches the one of this Redis
  * instance and that the checksum is ok.
  * If the DUMP payload looks valid C_OK is returned, otherwise C_ERR

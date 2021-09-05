@@ -66,7 +66,6 @@ struct evictionPoolEntry {
 
 static struct evictionPoolEntry *EvictionPoolLRU;
 
-
 /* ----------------------------------------------------------------------------
  * Implementation of eviction, aging and LRU
  * --------------------------------------------------------------------------*/
@@ -582,25 +581,34 @@ int freeMemoryIfNeeded(void) {
 			robj *val;
 			rio payload;
 			db = server.db + bestdbid;
-			robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
-			if ((val = lookupKeyRead(db, keyobj)) == NULL) {
-				decrRefCount(keyobj);
+			/*dbRequest *dbreq = createDbRequest(REQUEST_WRITE);*/
+			dbRequest* dbreq = fetchDbRequestObject(REQUEST_WRITE);
+			if (dbreq == NULL) {
+				continue;
+			}
+			dbreq->dbid = bestdbid;
+	
+			assert(dbreq->keyobj); 
+			sdsclear(dbreq->keyobj->ptr); 
+			dbreq->keyobj->ptr = sdscatlen(dbreq->keyobj->ptr, bestkey, sdslen(bestkey));
+	
+			if ((val = lookupKeyRead(db, dbreq->keyobj)) == NULL) {
 				continue;
 			}
 			val->lru = EVICT_MARK_VALUE;
-			createDumpPayload(&payload, val, keyobj);
-			dbRequest *dbreq = createDbRequest(REQUEST_WRITE);
-			if (dbreq == NULL) {
-				decrRefCount(keyobj);
-				continue;
-			}
-			dbreq->keyobj = keyobj;
-			dbreq->dbid = bestdbid;
+
+			assert(dbreq->buffer);
+			sdsclear(dbreq->buffer); 
+			createDumpPayloadEx(&payload, val, dbreq->keyobj , dbreq->buffer);
+			dbreq->buffer = payload.io.buffer.ptr; 
+
 			char* cmd;
 			int len = redisFormatCommand(&cmd, "SET %b %b", bestkey, sdslen(bestkey), payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr));
-			dbreq->buffer = sdsnewlen(cmd, len);
+			sdsclear(dbreq->buffer);
+			dbreq->buffer = sdscatlen(dbreq->buffer , cmd, len);
 			free(cmd);
-			sdsfree(payload.io.buffer.ptr);
+			/*sdsfree(payload.io.buffer.ptr);*/
+
 			asyncPostDbRequest(dbreq);
 
 			mem_freed += objectComputeSize(val, LLONG_MAX);

@@ -722,7 +722,7 @@ void dbloadCommand(client *c) {
 	if (obj != shared.emptyvalue)
 		return; 
 	
-	dbRequest *dbreq = createDbRequest(REQUEST_READ);
+	dbRequest *dbreq = fetchDbRequestObject(REQUEST_READ);
 	dbreq->dbid = dbid;
 	dbreq->client_id = c->id;
 	dbreq->param_ex = client_id; 

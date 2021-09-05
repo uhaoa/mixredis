@@ -1085,8 +1085,6 @@ static int processClusterReplyBuffer(redisContext *ctx, dbNode *node)
 		// success
 		/* removeEvictKey(req->keyobj, req->dbid, 0); */
 		if (req->request_type == REQUEST_READ) {
-			sdsfree(req->buffer);
-			req->buffer = NULL; 
 			if (reply->type == REDIS_REPLY_STRING) {
 				rio payload;
 				sds rep_str = sdsnewlen(reply->str, reply->len); 
@@ -1098,21 +1096,17 @@ static int processClusterReplyBuffer(redisContext *ctx, dbNode *node)
 					sdsfree(rep_str); 
 					goto consume_buffer;
 				}
-				req->value_obj = rdbLoadObject(type, &payload, reply->str);
+				req->value_obj = rdbLoadObject(type, &payload, req->keyobj->ptr);
 				if (req->value_obj == NULL) {
 					sdsfree(rep_str);
 					goto consume_buffer;
 				}
 				/* restore -> aof & slave */
-				/*sdsfree(req->buffer);*/ 
-				req->argv[0] = createStringObject("restore", 7); 
-				req->argv[1] = createStringObject(req->keyobj->ptr, sdslen(req->keyobj->ptr));
-				req->argv[2] = createStringObject("0", 1);
-				req->argv[3] = createStringObject(reply->str, reply->len);
-				req->argv[4] = createStringObject("replace", 7);
- 				//req->buffer = sdscatprintf(sdsempty(), "*4\r\n$7\r\nrestore\r\n$%i\r\n%s\r\n$1\r\n0\r\n$%i\r\n", sdslen(req->keyobj->ptr), req->keyobj->ptr, reply->len);
-				//req->buffer = sdscatlen(req->buffer, reply->str, reply->len);
-				//req->buffer = sdscatlen(req->buffer, "\r\n", 2);
+				req->argv[0]->ptr = sdscatlen(req->argv[0]->ptr, "restore", 7);
+				req->argv[1]->ptr = sdscatlen(req->argv[1]->ptr, req->keyobj->ptr, sdslen(req->keyobj->ptr));
+				req->argv[2]->ptr = sdscatlen(req->argv[2]->ptr, "0", 1);
+				req->argv[3]->ptr = sdscatlen(req->argv[3]->ptr, reply->str, reply->len);
+				req->argv[4]->ptr = sdscatlen(req->argv[4]->ptr, "replace", 7);
 
 				sdsfree(rep_str);
 			}
@@ -1423,11 +1417,11 @@ dbRequest *createDbRequest(int request_type)
 	if (req == NULL) 
 		return NULL;
 	req->id = server.next_request_id++;
-	req->keyobj = NULL;
+	req->keyobj = createRawStringObject("init" , 4);
 	req->dbid = 0; 
-	req->buffer = NULL;
+	req->buffer = sdsempty();
 	for (int i= 0 ; i < 5 ; i++) {
-		req->argv[i] = NULL; 
+		req->argv[i] = createRawStringObject("init", 4);
 	}
 	req->node = NULL; 
 	req->written = 0;
@@ -1436,10 +1430,9 @@ dbRequest *createDbRequest(int request_type)
 	req->request_type = request_type; 
 	req->value_obj = NULL; 
 	req->client_id = 0; 
-	req->param_ex = 0; 
 	req->requests_pending_lnode = NULL;
 	req->requests_to_send_lnode = NULL;
-	atomicIncr(server.db_cluster->request_count, 1);
+	req->param_ex = 0; 
 	return req; 
 }
 

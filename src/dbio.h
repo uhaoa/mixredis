@@ -6,7 +6,8 @@ void dbioInit(void);
 void asyncPostDbRequest(dbRequest * req);
 void asyncPostDbResponse(dbRequest * req);
 void dbioKillThreads(void);
-void processDbResponse(); 
+void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* clientData, int mask);
 int tryReadEmptyKeys(client *c);
-
+dbRequest* fetchDbRequestObject(int request_type);
+void recycleDbRequestObject(dbRequest* req);
 #endif

@@ -6,12 +6,19 @@
 #include "atomicvar.h"
 
 static pthread_t dbio_thread;
+/* 请求队列. redis->tendis. */
 static list *dbio_req_list;
+/* 回复队列. tendis->redis. */
 static list *dbio_resp_list;
-static pthread_mutex_t dbio_mutex; 
+static pthread_mutex_t dbio_mutex;
+/* 唤醒dbio线程的event fd. */
 static int event_fd = 0;
 static size_t already_wakeup = 0;
 static size_t already_main_wakeup = 0;
+
+/* dbRequest对象池.*/
+static list* db_request_pool;
+
 
 int dbioServerCron(struct aeEventLoop *eventLoop, long long id, void *clientData, int mask);
 void *dbioMain(void *arg); 
@@ -23,6 +30,7 @@ void dbioInit(void) {
 	pthread_mutex_init(&dbio_mutex, NULL);
 	dbio_req_list = listCreate();
 	dbio_resp_list = listCreate();
+	db_request_pool = listCreate(); 
 	event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK); 
 	if (aeCreateFileEvent(server.db_el, event_fd, AE_READABLE, dbioServerCron, NULL) == AE_ERR) {
 		serverDbLog(LL_WARNING, "Fatal: aeCreateFileEvent event_fd.");
@@ -151,11 +159,13 @@ int tryReadEmptyKeys(client *c)
 			if ((server.cluster_enabled && nodeIsMaster(server.cluster->myself)) ||
 					(!server.cluster_enabled && !server.masterhost)) 
 			{
-				dbRequest *dbreq = createDbRequest(REQUEST_READ);
+				dbRequest *dbreq = fetchDbRequestObject(REQUEST_READ);
 				dbreq->dbid = c->db->id;
 				dbreq->client_id = c->id;
-				dbreq->keyobj = createStringObject(thiskey->ptr, sdslen(thiskey->ptr));
-				dbreq->buffer = sdscatprintf(sdsempty(), "*2\r\n$3\r\nget\r\n$%i\r\n%s\r\n", sdslen(thiskey->ptr), thiskey->ptr);
+				sdsclear(dbreq->keyobj->ptr);
+				dbreq->keyobj->ptr = sdscatlen(dbreq->keyobj->ptr, thiskey->ptr, sdslen(thiskey->ptr));
+				sdsclear(dbreq->buffer);
+				dbreq->buffer = sdscatprintf(dbreq->buffer, "*2\r\n$3\r\nget\r\n$%i\r\n%s\r\n", sdslen(thiskey->ptr), thiskey->ptr);
 				asyncPostDbRequest(dbreq);
 
 				emptynums++;
@@ -256,7 +266,7 @@ void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* client
 				}
 				client* c = lookupClientByID(req->client_id);
 				if (!c) {
-					freeDbRequest(req);
+					recycleDbRequestObject(req);
 					break;
 				}
 				if (c->flags & CLIENT_SLAVE) {
@@ -280,7 +290,7 @@ void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* client
 			else {
 				assert(0);
 			}
-			freeDbRequest(req);
+			recycleDbRequestObject(req);
 			if (listLength(dbio_resp_list) == 0) {
 				break;
 			}
@@ -288,8 +298,11 @@ void processDbResponse(struct aeEventLoop* eventLoop, long long id, void* client
 		pthread_mutex_unlock(&dbio_mutex);
 		atomicSet(already_main_wakeup, 0);
 	}
-}
 
+	if (listLength(server.unblocked_clients)) {
+		processUnblockedClients();
+	}
+}
 
 void dbioKillThreads(void) {
     int err;
@@ -305,3 +318,61 @@ void dbioKillThreads(void) {
 		}
 	}
 }
+
+void initDbRequestObject(dbRequest* req)
+{
+	if (NULL == req) {
+		return; 
+	}
+	req->id = server.next_request_id++;
+
+	req->dbid = 0;
+	sdsclear(req->buffer); 
+	sdsclear(req->keyobj->ptr);
+
+	if (req->value_obj) {
+		decrRefCount(req->value_obj);
+		req->value_obj = NULL;
+	}
+	for (int i = 0; i < 5; i++) {
+		sdsclear(req->argv[i]->ptr); 
+	}
+
+	req->node = NULL;
+	req->written = 0;
+	req->has_write_handler = 0;
+	req->need_reprocessing = 0;
+	req->client_id = 0;
+	req->requests_pending_lnode = NULL;
+	req->requests_to_send_lnode = NULL;
+	req->param_ex = 0;
+	atomicIncr(server.db_cluster->request_count, 1);
+}
+
+dbRequest* fetchDbRequestObject(int request_type)
+{
+	dbRequest* req = NULL; 
+	if (listLength(db_request_pool) == 0) {
+		req = createDbRequest(request_type);
+	}
+	else {
+		listNode* ln = listFirst(db_request_pool);
+		assert(ln);
+		req = listNodeValue(ln);
+		listDelNode(db_request_pool, ln);
+	}
+	req->request_type = request_type; 
+	initDbRequestObject(req);
+	return req; 
+}
+
+void recycleDbRequestObject(dbRequest* req)
+{
+	if (req->value_obj) {
+		decrRefCount(req->value_obj);
+		req->value_obj = NULL; 
+	}
+	listAddNodeTail(db_request_pool, req);
+	atomicDecr(server.db_cluster->request_count, 1);
+}
+

@@ -87,16 +87,21 @@ enum dbRequestType {
 
 typedef struct dbRequest {
 	uint64_t id;
-	robj *keyobj;
-	uint64_t dbid;
-	sds buffer;
-	robj *argv[5];
+	int request_type;
+
+	robj *keyobj;					/* REQUEST_WRITE & REQUEST_READ */
+	sds buffer;						/* REQUEST_WRITE & REQUEST_READ */
+
+	uint64_t dbid;					/* REQUEST_WRITE */
+
+	robj *argv[5];					/* REQUEST_READ */
+	robj* value_obj;				/* REQUEST_READ */
+
 	dbNode *node;
 	size_t written;
 	int has_write_handler;
 	int need_reprocessing;
-	int request_type; 
-	robj *value_obj; 
+	
 	uint64_t client_id;            /* Client incremental unique ID. */
 	listNode *requests_to_send_lnode; /* Pointer to node in
 									  * redisClusterConnection->
@@ -105,7 +110,7 @@ typedef struct dbRequest {
 									  * redisClusterConnection->
 									  * requests_pending list */
 
-	uint64_t param_ex; 
+	uint64_t param_ex;
 } dbRequest;
 
 typedef struct dbCluster {
@@ -132,7 +137,7 @@ void freeDbCluster(dbCluster *cluster);
 int fetchDbClusterConfiguration(dbCluster *cluster,
 	dbClusterEntryPoint* entry_points,
 	int entry_points_count);
-dbRequest *createDbRequest();
+dbRequest *createDbRequest(int request_type);
 void freeDbRequest(dbRequest *req);
 int postDbRequest(dbRequest *req);
 redisContext *dbNodeConnect(dbNode *node);

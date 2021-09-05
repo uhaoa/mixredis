@@ -2132,7 +2132,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                           &ei);
 
 	run_with_period(500) {
-        processDbResponse();
+        processDbResponse(NULL, 0, NULL, 0); 
 	}
 
     server.cronloops++;
